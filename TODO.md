@@ -76,7 +76,7 @@
   - [x] propagation download и peer sync через shared instance.
 - [x] Сопоставить оставшийся публичный API rsLXMF с Python LXMF и зафиксировать
   известные несовпадения.
-- [ ] Выполнить финальный прогон `cargo check --workspace --all-targets` и
+- [x] Выполнить финальный прогон `cargo check --workspace --all-targets` и
   `cargo test --workspace` в обоих репозиториях.
 
 ## Резюме за 24 июля 2026
