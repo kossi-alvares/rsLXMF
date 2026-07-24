@@ -10,7 +10,6 @@ base64 = { workspace = true }
 rns-crypto = { workspace = true }
 rns-wire = { workspace = true }
 rns-identity = { workspace = true }
-rns-link = { workspace = true }
 rns-protocol = { workspace = true }
 rns-transport = { workspace = true }
 rns-runtime = { workspace = true }

@@ -11,9 +11,10 @@ use std::time::{Duration, Instant};
 
 use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_identity::identity::Identity;
-use rns_link::constants::{ESTABLISHMENT_TIMEOUT_PER_HOP, KEEPALIVE_DEFAULT};
-use rns_link::link::LinkState;
-use rns_runtime::link_client::{LinkPayloadSendReceipt, LinkSession, LinkSessionHandle};
+use rns_runtime::link_client::{
+    ESTABLISHMENT_TIMEOUT_PER_HOP, KEEPALIVE_DEFAULT, LinkPayloadSendReceipt, LinkSession,
+    LinkSessionHandle, LinkState,
+};
 pub use rns_runtime::link_manager::{
     LinkPayloadSendReceipt as BackchannelSendReceipt, LinkSendError as BackchannelSendError,
 };

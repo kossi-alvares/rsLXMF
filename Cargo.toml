@@ -17,7 +17,6 @@ rust-version = "1.85"
 rns-crypto = { path = "../rsReticulum/crates/rns-crypto", version = "1.0.1" }
 rns-wire = { path = "../rsReticulum/crates/rns-wire", version = "1.0.1" }
 rns-identity = { path = "../rsReticulum/crates/rns-identity", version = "1.0.1" }
-rns-link = { path = "../rsReticulum/crates/rns-link", version = "1.0.1" }
 rns-protocol = { path = "../rsReticulum/crates/rns-protocol", version = "1.0.1" }
 rns-transport = { path = "../rsReticulum/crates/rns-transport", version = "1.0.1" }
 rns-runtime = { path = "../rsReticulum/crates/rns-runtime", version = "1.0.1" }

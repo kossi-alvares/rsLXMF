@@ -54,6 +54,8 @@
 - [x] Сохранить входящие backchannel-ссылки через `LinkManager` без ручной
   обработки Resource ADV/parts/HMU/proofs в rsLXMF; использовать нативные
   receipt/error типы `LinkManager` без адаптера в `lxmd`.
+- [x] Удалить прямую зависимость rsLXMF от `rns-link`; Link state и таймауты
+  экспортируются публичным runtime API rsReticulum.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
