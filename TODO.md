@@ -17,6 +17,8 @@
   (`221fa8b`).
 - [x] Перевести propagation и control announce в rsLXMF на общий announce API
   rsReticulum (`542575b`).
+- [x] Расширить долгоживущий `LinkSession` high-level отправкой payload с
+  автоматическим выбором packet/resource и ожиданием delivery proof.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
   tools, examples, CLI и doc tests.
 
@@ -27,8 +29,6 @@
     backchannel-маршрутизацию;
   - перенести установку Link, identification, отправку packet/resource и
     обработку proofs на публичные API rsReticulum.
-- [ ] При необходимости расширить rsReticulum API для долгоживущих и повторно
-  используемых исходящих Link-сессий.
 - [ ] Сохранить поддержку входящих backchannel-ссылок через `LinkManager`,
   убрав из rsLXMF ручную обработку Resource advertisement, parts, HMU и proofs.
 - [ ] Перевести opportunistic delivery с ручной сборки Reticulum DATA-пакета на

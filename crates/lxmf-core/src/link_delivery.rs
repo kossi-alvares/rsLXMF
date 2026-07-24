@@ -75,7 +75,10 @@ pub struct PendingDelivery {
     /// Upstream identifies the initiator after the first successful Direct
     /// delivery, making the link usable as a peer backchannel.
     pub backchannel_identified: bool,
-    queued: VecDeque<QueuedDelivery>,
+    /// LXMF-owned scheduling state. Link establishment and transfer state stay
+    /// outside this queue so it can be retained when the network backend is
+    /// replaced by a runtime-owned `LinkSession`.
+    queue: DirectDeliveryQueue,
 }
 
 /// Message payload waiting for an existing Direct link to become active/idle.
@@ -85,6 +88,50 @@ struct QueuedDelivery {
     auto_compress: bool,
     msg_hash: Option<[u8; 32]>,
     queued_at: Instant,
+}
+
+/// FIFO policy for messages sharing one reusable Direct Link.
+///
+/// This type deliberately contains no Reticulum Link or Resource state.
+#[derive(Default)]
+struct DirectDeliveryQueue {
+    pending: VecDeque<QueuedDelivery>,
+}
+
+impl DirectDeliveryQueue {
+    fn len(&self) -> usize {
+        self.pending.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    fn push(&mut self, delivery: QueuedDelivery) {
+        self.pending.push_back(delivery);
+    }
+
+    fn pop(&mut self) -> Option<QueuedDelivery> {
+        self.pending.pop_front()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &QueuedDelivery> {
+        self.pending.iter()
+    }
+
+    fn position_by_hash(&self, msg_hash: [u8; 32]) -> Option<usize> {
+        self.pending
+            .iter()
+            .position(|delivery| delivery.msg_hash == Some(msg_hash))
+    }
+
+    fn remove(&mut self, index: usize) -> Option<QueuedDelivery> {
+        self.pending.remove(index)
+    }
+
+    fn drain(&mut self) -> impl Iterator<Item = QueuedDelivery> + '_ {
+        self.pending.drain(..)
+    }
 }
 
 impl QueuedDelivery {
@@ -107,7 +154,7 @@ impl PendingDelivery {
         } else {
             1
         };
-        current + self.queued.len()
+        current + self.queue.len()
     }
 
     fn queue_delivery(
@@ -116,12 +163,12 @@ impl PendingDelivery {
         packed_override: Option<Vec<u8>>,
         auto_compress: bool,
     ) {
-        self.queued
-            .push_back(QueuedDelivery::new(message, packed_override, auto_compress));
+        self.queue
+            .push(QueuedDelivery::new(message, packed_override, auto_compress));
     }
 
     fn start_queued_delivery(&mut self) -> bool {
-        let Some(next) = self.queued.pop_front() else {
+        let Some(next) = self.queue.pop() else {
             return false;
         };
         self.message = next.message;
@@ -138,7 +185,7 @@ impl PendingDelivery {
             link_id = %hex_encode(&self.link.link_id),
             dest = %hex_encode(&self.dest_hash),
             queued_for_secs = next.queued_at.elapsed().as_secs_f64(),
-            remaining_queue = self.queued.len(),
+            remaining_queue = self.queue.len(),
             "starting queued Direct link delivery"
         );
         true
@@ -773,7 +820,7 @@ impl LinkDeliveryManager {
                     dest = %hex_encode(&dest_hash),
                     state = ?state,
                     link_state = ?link_state,
-                    queued = delivery.queued.len(),
+                    queued = delivery.queue.len(),
                     pending_count = delivery.active_delivery_count(),
                     "reusing cached Direct link delivery session"
                 );
@@ -783,7 +830,7 @@ impl LinkDeliveryManager {
                     kind,
                     link_state,
                     delivery_state: delivery.state,
-                    queued_deliveries: delivery.queued.len(),
+                    queued_deliveries: delivery.queue.len(),
                     in_flight_deliveries: usize::from(delivery.state != DeliveryState::Idle),
                 };
                 self.delivery_events.push_back(LxmfDeliveryEvent {
@@ -957,7 +1004,7 @@ impl LinkDeliveryManager {
                 failure_reason: None,
                 reusable,
                 backchannel_identified: false,
-                queued: VecDeque::new(),
+                queue: DirectDeliveryQueue::default(),
             },
         );
         if reusable {
@@ -1267,7 +1314,7 @@ impl LinkDeliveryManager {
             let mut remove_session = false;
 
             if delivery.state == DeliveryState::Idle
-                && !delivery.queued.is_empty()
+                && !delivery.queue.is_empty()
                 && delivery.link.is_active()
             {
                 let _ = delivery.start_queued_delivery();
@@ -1307,7 +1354,7 @@ impl LinkDeliveryManager {
                         age_secs = elapsed.as_secs_f64(),
                         timeout_secs = timeout.as_secs_f64(),
                         reason,
-                        queued = delivery.queued.len(),
+                        queued = delivery.queue.len(),
                         "link delivery timed out"
                     );
                     push_failed_delivery_and_queue(
@@ -1614,7 +1661,7 @@ impl LinkDeliveryManager {
                     );
                     remove_session = true;
                 } else if delivery.state == DeliveryState::Idle
-                    && delivery.queued.is_empty()
+                    && delivery.queue.is_empty()
                     && delivery.link.is_active()
                     && direct_link_idle_expired(delivery)
                 {
@@ -2065,12 +2112,8 @@ impl LinkDeliveryManager {
                 break;
             }
 
-            if let Some(pos) = delivery
-                .queued
-                .iter()
-                .position(|queued| queued.msg_hash == Some(msg_hash))
-            {
-                if let Some(queued) = delivery.queued.remove(pos) {
+            if let Some(pos) = delivery.queue.position_by_hash(msg_hash) {
+                if let Some(queued) = delivery.queue.remove(pos) {
                     self.delivery_events.push_back(queued_delivery_event(
                         LxmfDeliveryEventKind::Failed,
                         *link_id,
@@ -2165,12 +2208,8 @@ impl LinkDeliveryManager {
                 break;
             }
 
-            if let Some(pos) = delivery
-                .queued
-                .iter()
-                .position(|queued| queued.msg_hash == Some(msg_hash))
-            {
-                delivery.queued.remove(pos);
+            if let Some(pos) = delivery.queue.position_by_hash(msg_hash) {
+                delivery.queue.remove(pos);
                 cancelled = true;
                 break;
             }
@@ -2226,13 +2265,13 @@ impl LinkDeliveryManager {
                     representation: delivery.message.representation,
                     progress: delivery.message.progress,
                     queued: false,
-                    queued_deliveries: delivery.queued.len(),
+                    queued_deliveries: delivery.queue.len(),
                     in_flight_deliveries,
                 });
             }
 
             if let Some(queued) = delivery
-                .queued
+                .queue
                 .iter()
                 .find(|queued| queued.msg_hash == Some(msg_hash))
             {
@@ -2244,7 +2283,7 @@ impl LinkDeliveryManager {
                     representation: queued.message.representation,
                     progress: queued.message.progress,
                     queued: true,
-                    queued_deliveries: delivery.queued.len(),
+                    queued_deliveries: delivery.queue.len(),
                     in_flight_deliveries,
                 });
             }
@@ -2310,7 +2349,7 @@ impl LinkDeliveryManager {
             link_state: delivery.link.state,
             delivery_state: delivery.state,
             idle_expired: direct_link_idle_expired(delivery),
-            queued_deliveries: delivery.queued.len(),
+            queued_deliveries: delivery.queue.len(),
             in_flight_deliveries: usize::from(delivery.state != DeliveryState::Idle),
         })
     }
@@ -2349,7 +2388,7 @@ impl LinkDeliveryManager {
             ..LinkDeliveryStats::default()
         };
         for delivery in self.pending.values() {
-            stats.queued_deliveries += delivery.queued.len();
+            stats.queued_deliveries += delivery.queue.len();
             if delivery.state != DeliveryState::Idle {
                 stats.in_flight_deliveries += 1;
             }
@@ -2397,7 +2436,7 @@ fn delivery_event(
         representation: delivery.message.representation,
         link_state: delivery.link.state,
         delivery_state: delivery.state,
-        queued_deliveries: delivery.queued.len(),
+        queued_deliveries: delivery.queue.len(),
         in_flight_deliveries: usize::from(delivery.state != DeliveryState::Idle),
         reason,
     }
@@ -2618,7 +2657,7 @@ fn fail_queued_deliveries(
     delivery: &mut PendingDelivery,
     reason: &str,
 ) {
-    for queued in delivery.queued.drain(..) {
+    for queued in delivery.queue.drain() {
         events.push_back(queued_delivery_event(
             LxmfDeliveryEventKind::Failed,
             link_id,
@@ -2749,7 +2788,7 @@ fn link_data_idle_for(link: &Link) -> Duration {
 
 fn direct_link_idle_expired(delivery: &PendingDelivery) -> bool {
     delivery.state == DeliveryState::Idle
-        && delivery.queued.is_empty()
+        && delivery.queue.is_empty()
         && delivery.link.is_active()
         && link_data_idle_for(&delivery.link) > LINK_MAX_INACTIVITY
 }
