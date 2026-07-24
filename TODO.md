@@ -28,6 +28,9 @@
   Direct и propagation требуют настроенный `ReticulumHandle`.
 - [x] Исключить legacy LinkRequest destination channel, transport errors и
   inbound wire handlers из production-компиляции `LinkDeliveryManager`.
+- [x] Удалить переходные legacy-тесты Link creation/transport capacity,
+  establishment timeout и Direct Link reuse; reuse покрыт тестом
+  `LinkSessionHandle` в rsReticulum.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
