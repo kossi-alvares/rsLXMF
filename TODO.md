@@ -42,6 +42,8 @@
   из публичного production API `LinkDeliveryManager`.
 - [x] Исключить ручной Link/Resource driver из production-ветки `tick()` и
   закрывать runtime-owned сессию при отмене активной доставки.
+- [x] Удалить последние тесты, создававшие обходной test-only Direct Link без
+  `ReticulumHandle`; сохранить независимые тесты LXMF backchannel-состояний.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,

@@ -97,6 +97,7 @@ pub struct PendingDelivery {
 
 enum OutboundDeliveryLink {
     #[cfg(test)]
+    #[allow(dead_code)]
     Legacy(Link),
     Runtime {
         handle: LinkSessionHandle,
@@ -585,14 +586,6 @@ impl fmt::Display for LinkDeliveryStartFailure {
 
 impl std::error::Error for LinkDeliveryStartFailure {}
 
-#[cfg(test)]
-fn start_error_from_reserve(err: TrySendError<()>) -> LinkDeliveryStartError {
-    match err {
-        TrySendError::Full(_) => LinkDeliveryStartError::TransportFull,
-        TrySendError::Closed(_) => LinkDeliveryStartError::TransportClosed,
-    }
-}
-
 fn spawn_runtime_payload_send(
     handle: LinkSessionHandle,
     payload: Vec<u8>,
@@ -671,8 +664,6 @@ pub struct LinkDeliveryManager {
     #[cfg(test)]
     identity_key: Option<Ed25519PrivateKey>,
     #[cfg(test)]
-    event_tx: mpsc::Sender<DestinationEvent>,
-    #[cfg(test)]
     event_rx: mpsc::Receiver<DestinationEvent>,
     delivery_events: VecDeque<LxmfDeliveryEvent>,
 }
@@ -684,7 +675,7 @@ impl LinkDeliveryManager {
         identity_key: Option<Ed25519PrivateKey>,
     ) -> Self {
         #[cfg(test)]
-        let (event_tx, event_rx) = mpsc::channel(256);
+        let (_event_tx, event_rx) = mpsc::channel(256);
         #[cfg(not(test))]
         let _ = (identity_pub, identity_key);
         Self {
@@ -703,8 +694,6 @@ impl LinkDeliveryManager {
             identity_pub,
             #[cfg(test)]
             identity_key,
-            #[cfg(test)]
-            event_tx,
             #[cfg(test)]
             event_rx,
             delivery_events: VecDeque::new(),
@@ -906,25 +895,14 @@ impl LinkDeliveryManager {
             return Ok(link_id);
         }
 
-        #[cfg(not(test))]
-        return Err(LinkDeliveryStartFailure {
+        Err(LinkDeliveryStartFailure {
             error: if self.runtime.is_none() || self.runtime_identity.is_none() {
                 LinkDeliveryStartError::RuntimeUnavailable
             } else {
                 LinkDeliveryStartError::RemoteIdentityUnavailable
             },
             message: Box::new(message),
-        });
-
-        #[cfg(test)]
-        self.start_delivery_inner(
-            message,
-            dest_hash,
-            hops,
-            Some(packed_payload),
-            auto_compress,
-            false,
-        )
+        })
     }
 
     /// Start a Direct delivery over a registered inbound backchannel Link.
@@ -1207,179 +1185,14 @@ impl LinkDeliveryManager {
             return Ok(report);
         }
 
-        #[cfg(not(test))]
-        return Err(LinkDeliveryStartFailure {
+        Err(LinkDeliveryStartFailure {
             error: if self.runtime.is_none() || self.runtime_identity.is_none() {
                 LinkDeliveryStartError::RuntimeUnavailable
             } else {
                 LinkDeliveryStartError::RemoteIdentityUnavailable
             },
             message: Box::new(message),
-        });
-
-        #[cfg(test)]
-        let link_id = self.start_delivery_inner(message, dest_hash, hops, None, true, true)?;
-        #[cfg(test)]
-        let snapshot = self.direct_link_snapshot(dest_hash);
-        #[cfg(test)]
-        let report = DirectLinkStartReport {
-            link_id,
-            dest_hash,
-            kind: DirectLinkStartKind::NewDirect,
-            link_state: snapshot.map(|s| s.link_state).unwrap_or(LinkState::Pending),
-            delivery_state: snapshot
-                .map(|s| s.delivery_state)
-                .unwrap_or(DeliveryState::Establishing),
-            queued_deliveries: 0,
-            in_flight_deliveries: 1,
-        };
-        #[cfg(test)]
-        self.delivery_events.push_back(LxmfDeliveryEvent {
-            kind: LxmfDeliveryEventKind::LinkEstablishing,
-            method: LxmfDeliveryEventMethod::Direct,
-            link_id,
-            dest_hash,
-            msg_hash,
-            attempts,
-            progress: Some(0.03),
-            representation: DeliveryRepresentation::Unknown,
-            link_state: report.link_state,
-            delivery_state: report.delivery_state,
-            queued_deliveries: report.queued_deliveries,
-            in_flight_deliveries: report.in_flight_deliveries,
-            reason: None,
-        });
-        #[cfg(test)]
-        Ok(report)
-    }
-
-    #[cfg(test)]
-    fn start_delivery_inner(
-        &mut self,
-        message: LxMessage,
-        dest_hash: [u8; 16],
-        hops: u8,
-        packed_override: Option<Vec<u8>>,
-        auto_compress: bool,
-        reusable: bool,
-    ) -> Result<[u8; 16], LinkDeliveryStartFailure> {
-        let msg_hash = message.hash;
-        let (link, request_data) = Link::new_initiator(dest_hash, hops);
-        let link_id = link.link_id;
-        let pending_count = self.pending_count();
-
-        let register_permit = match self.transport_tx.try_reserve() {
-            Ok(permit) => permit,
-            Err(err) => {
-                let error = start_error_from_reserve(err);
-                tracing::warn!(
-                    link_id = %hex_encode(&link_id),
-                    dest = %hex_encode(&dest_hash),
-                    hops = hops.max(1),
-                    pending_count,
-                    register_result = %error,
-                    outbound_result = "not_attempted",
-                    "failed to start link delivery"
-                );
-                return Err(LinkDeliveryStartFailure {
-                    error,
-                    message: Box::new(message),
-                });
-            }
-        };
-
-        let outbound_permit = match self.transport_tx.try_reserve() {
-            Ok(permit) => permit,
-            Err(err) => {
-                let error = start_error_from_reserve(err);
-                tracing::warn!(
-                    link_id = %hex_encode(&link_id),
-                    dest = %hex_encode(&dest_hash),
-                    hops = hops.max(1),
-                    pending_count,
-                    register_result = "reserved",
-                    outbound_result = %error,
-                    "failed to start link delivery"
-                );
-                return Err(LinkDeliveryStartFailure {
-                    error,
-                    message: Box::new(message),
-                });
-            }
-        };
-
-        // Register the ephemeral link_id so proofs and data route back to us.
-        let flags = rns_wire::flags::PacketFlags {
-            header_type: rns_wire::flags::HeaderType::Header1,
-            context_flag: false,
-            transport_type: rns_wire::flags::TransportType::Broadcast,
-            destination_type: rns_wire::flags::DestinationType::Single,
-            packet_type: rns_wire::flags::PacketType::LinkRequest,
-        };
-        let header = rns_wire::header::PacketHeader {
-            flags,
-            hops: 0,
-            transport_id: None,
-            destination_hash: dest_hash,
-            context: rns_wire::context::PacketContext::None,
-        };
-        let mut raw = header.pack();
-        raw.extend_from_slice(&request_data);
-
-        register_permit.send(TransportMessage::RegisterDestination {
-            hash: link_id,
-            app_name: "lxmf.delivery.link".to_string(),
-            delivery_tx: Some(self.event_tx.clone()),
-        });
-        outbound_permit.send(TransportMessage::Outbound(OutboundRequest {
-            raw: Bytes::from(raw),
-            destination_hash: dest_hash,
-        }));
-
-        let establishment_timeout_secs = ESTABLISHMENT_TIMEOUT_PER_HOP * (hops.max(1) as f64);
-        // Full transfer timeout keeps the previous keepalive allowance once
-        // establishment has succeeded.
-        let timeout_secs = establishment_timeout_secs + KEEPALIVE_DEFAULT;
-        self.pending.insert(
-            link_id,
-            PendingDelivery {
-                message,
-                dest_hash,
-                packed_override,
-                auto_compress,
-                link: OutboundDeliveryLink::Legacy(link),
-                state: DeliveryState::Establishing,
-                started_at: Instant::now(),
-                #[cfg(test)]
-                network_transfer: LinkTransferState::default(),
-                runtime_result: None,
-                establishment_timeout: Duration::from_secs_f64(establishment_timeout_secs),
-                timeout: Duration::from_secs_f64(timeout_secs),
-                msg_hash,
-                failure_reason: None,
-                reusable,
-                backchannel_identified: false,
-                queue: DirectDeliveryQueue::default(),
-            },
-        );
-        if reusable {
-            self.direct_links.insert(dest_hash, link_id);
-        }
-
-        tracing::debug!(
-            link_id = %hex_encode(&link_id),
-            dest = %hex_encode(&dest_hash),
-            hops = hops.max(1),
-            pending_count,
-            reusable,
-            register_result = "ok",
-            outbound_result = "ok",
-            establishment_timeout_secs,
-            delivery_timeout_secs = timeout_secs,
-            "link delivery started"
-        );
-
-        Ok(link_id)
+        })
     }
 
     /// Drain inbound transport events and dispatch by packet context.
@@ -3598,52 +3411,6 @@ fn dispatch_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn next_outbound(rx: &mut mpsc::Receiver<TransportMessage>) -> Vec<u8> {
-        while let Ok(message) = rx.try_recv() {
-            if let TransportMessage::Outbound(request) = message {
-                return request.raw.to_vec();
-            }
-        }
-        panic!("expected outbound transport message");
-    }
-
-    fn establish_active_delivery(
-        mgr: &mut LinkDeliveryManager,
-        rx: &mut mpsc::Receiver<TransportMessage>,
-        msg: LxMessage,
-        responder_key: &Ed25519PrivateKey,
-        dest_hash: [u8; 16],
-    ) -> ([u8; 16], Link) {
-        let link_id = mgr.start_delivery(msg, dest_hash, 1).unwrap();
-
-        let request_raw = next_outbound(rx);
-        let (request_header, request_offset) =
-            rns_wire::header::PacketHeader::unpack(&request_raw).unwrap();
-        assert_eq!(
-            request_header.flags.packet_type,
-            rns_wire::flags::PacketType::LinkRequest
-        );
-
-        let (mut responder_link, proof_data) =
-            Link::new_responder(&request_raw[request_offset..], responder_key, dest_hash, 1)
-                .unwrap();
-        let responder_pub = responder_key.public_key();
-        assert!(mgr.handle_link_proof(
-            &link_id,
-            &proof_data,
-            &responder_pub,
-            &responder_pub.to_bytes()
-        ));
-
-        let rtt_raw = next_outbound(rx);
-        let (rtt_header, rtt_offset) = rns_wire::header::PacketHeader::unpack(&rtt_raw).unwrap();
-        assert_eq!(rtt_header.context, rns_wire::context::PacketContext::Lrrtt);
-        responder_link
-            .receive_rtt_packet(&rtt_raw[rtt_offset..])
-            .unwrap();
-
-        (link_id, responder_link)
-    }
 
     #[test]
     fn test_link_delivery_manager_creation() {
@@ -3883,52 +3650,6 @@ mod tests {
     }
 
     #[test]
-    fn test_fail_delivery_by_message_hash_aborts_direct_session() {
-        let (tx, _rx) = mpsc::channel(64);
-        let mut mgr = LinkDeliveryManager::new(tx, None, None);
-        let dest_hash = [0xD3; 16];
-        let sign_key = Ed25519PrivateKey::generate();
-        let mut msg = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Direct",
-            "stale reusable delivery",
-            crate::constants::DeliveryMethod::Direct,
-        );
-        msg.sign(&sign_key).unwrap();
-        let msg_hash = msg.hash.unwrap();
-
-        let link_id = mgr.start_delivery(msg, dest_hash, 1).unwrap();
-        if let Some(delivery) = mgr.pending.get_mut(&link_id) {
-            delivery.state = DeliveryState::AwaitingProof;
-        }
-
-        let results = mgr.fail_delivery_by_message_hash(msg_hash, "direct fallback timeout");
-        assert_eq!(results.len(), 1);
-        assert!(matches!(
-            &results[0],
-            DeliveryResult::Failed {
-                link_id: id,
-                msg_hash: Some(hash),
-                dest_hash: dest,
-                reason,
-                ..
-            } if *id == link_id
-                && *hash == msg_hash
-                && *dest == dest_hash
-                && reason == "direct fallback timeout"
-        ));
-        assert_eq!(mgr.pending_count(), 0);
-        assert!(!mgr.delivery_link_available(&dest_hash));
-        let events = mgr.take_delivery_events();
-        assert!(
-            events
-                .iter()
-                .any(|event| event.kind == LxmfDeliveryEventKind::Failed)
-        );
-    }
-
-    #[test]
     fn test_fail_delivery_by_message_hash_aborts_backchannel_start() {
         let (tx, _rx) = mpsc::channel(16);
         let (cmd_tx, _cmd_rx) = mpsc::channel(16);
@@ -3968,149 +3689,5 @@ mod tests {
         ));
         assert_eq!(mgr.pending_count(), 0);
         assert!(!mgr.delivery_link_available(&dest_hash));
-    }
-
-    #[test]
-    fn test_direct_delivery_queues_on_pending_link_without_second_link_request() {
-        let (tx, mut rx) = mpsc::channel(64);
-        let mut mgr = LinkDeliveryManager::new(tx, None, None);
-        let dest_hash = [0xCD; 16];
-
-        let first = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "First",
-            "first queued message",
-            crate::constants::DeliveryMethod::Direct,
-        );
-        let second = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Second",
-            "second queued message",
-            crate::constants::DeliveryMethod::Direct,
-        );
-
-        let link_id = mgr.start_delivery(first, dest_hash, 1).unwrap();
-        let report = mgr
-            .start_delivery_with_report(second, dest_hash, 1)
-            .unwrap();
-        assert_eq!(report.link_id, link_id);
-        assert_eq!(report.kind, DirectLinkStartKind::QueuedOnDirect);
-        assert_eq!(report.delivery_state, DeliveryState::Establishing);
-        assert_eq!(report.queued_deliveries, 1);
-        assert_eq!(report.in_flight_deliveries, 1);
-        assert_eq!(mgr.pending_count(), 2);
-        assert_eq!(mgr.session_count(), 1);
-        assert_eq!(mgr.stats().queued_deliveries, 1);
-        assert_eq!(mgr.stats().establishing_direct_sessions, 1);
-
-        let register = rx.try_recv().unwrap();
-        assert!(matches!(
-            register,
-            TransportMessage::RegisterDestination { .. }
-        ));
-        let request = rx.try_recv().unwrap();
-        assert!(matches!(request, TransportMessage::Outbound(_)));
-        assert!(
-            rx.try_recv().is_err(),
-            "second message must wait on the cached pending link"
-        );
-
-        if let Some(delivery) = mgr.pending.get_mut(&link_id) {
-            delivery.establishment_timeout = Duration::ZERO;
-        }
-        let results = mgr.tick();
-        assert_eq!(
-            results
-                .iter()
-                .filter(|r| matches!(r, DeliveryResult::Failed { .. }))
-                .count(),
-            2
-        );
-        assert_eq!(mgr.pending_count(), 0);
-        assert_eq!(mgr.session_count(), 0);
-    }
-
-    #[test]
-    fn test_packed_delivery_is_one_shot_not_direct_session() {
-        let (tx, _rx) = mpsc::channel(64);
-        let mut mgr = LinkDeliveryManager::new(tx, None, None);
-        let dest_hash = [0xC1; 16];
-        let msg = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Propagation",
-            "deposit",
-            crate::constants::DeliveryMethod::Propagated,
-        );
-
-        let link_id = mgr
-            .start_packed_delivery(msg, dest_hash, 1, b"packed propagation".to_vec(), false)
-            .unwrap();
-
-        assert_eq!(mgr.pending_count(), 1);
-        assert_eq!(mgr.session_count(), 1);
-        assert_eq!(mgr.stats().direct_sessions, 0);
-        assert_eq!(mgr.stats().one_shot_sessions, 1);
-        assert!(!mgr.delivery_link_available(&dest_hash));
-        assert!(mgr.direct_link_snapshot(dest_hash).is_none());
-        assert!(!mgr.pending.get(&link_id).unwrap().reusable);
-    }
-
-    #[test]
-    fn test_over_mtu_message_tracks_hash() {
-        let (tx, _rx) = mpsc::channel(64);
-        let mut mgr = LinkDeliveryManager::new(tx, None, None);
-
-        let key = rns_crypto::ed25519::Ed25519PrivateKey::generate();
-        let mut msg = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Large Message",
-            &"x".repeat(1000),
-            crate::constants::DeliveryMethod::Direct,
-        );
-        msg.sign(&key).unwrap();
-        let expected_hash = msg.hash;
-
-        let link_id = mgr.start_delivery(msg, [0xCC; 16], 1).unwrap();
-        let delivery = mgr.pending.get(&link_id).unwrap();
-        assert_eq!(delivery.msg_hash, expected_hash);
-    }
-
-    #[test]
-    fn test_message_delivery_snapshot_reports_active_resource() {
-        let (tx, mut rx) = mpsc::channel(512);
-        let mut mgr = LinkDeliveryManager::new(tx, None, None);
-
-        let sign_key = Ed25519PrivateKey::generate();
-        let mut msg = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Snapshot Direct",
-            &"x".repeat(MAX_EFFICIENT_SIZE + 256),
-            crate::constants::DeliveryMethod::Direct,
-        );
-        msg.sign(&sign_key).unwrap();
-        let msg_hash = msg.hash.unwrap();
-
-        let responder_key = Ed25519PrivateKey::generate();
-        let dest_hash = [0xCC; 16];
-        let (link_id, _responder_link) =
-            establish_active_delivery(&mut mgr, &mut rx, msg, &responder_key, dest_hash);
-        let _ = mgr.take_delivery_events();
-        assert!(mgr.tick().is_empty());
-
-        let snapshot = mgr
-            .message_delivery_snapshot(msg_hash)
-            .expect("snapshot for active direct resource");
-        assert_eq!(snapshot.link_id, link_id);
-        assert_eq!(snapshot.dest_hash, dest_hash);
-        assert_eq!(snapshot.delivery_state, DeliveryState::Transferring);
-        assert_eq!(snapshot.representation, DeliveryRepresentation::Resource);
-        assert_eq!(snapshot.progress, 0.10);
-        assert!(!snapshot.queued);
-        assert_eq!(snapshot.in_flight_deliveries, 1);
     }
 }
