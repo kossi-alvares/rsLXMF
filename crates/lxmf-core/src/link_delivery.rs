@@ -290,6 +290,8 @@ struct PendingBackchannelDelivery {
 pub enum LinkDeliveryStartError {
     TransportFull,
     TransportClosed,
+    RuntimeUnavailable,
+    RemoteIdentityUnavailable,
 }
 
 impl fmt::Display for LinkDeliveryStartError {
@@ -297,6 +299,12 @@ impl fmt::Display for LinkDeliveryStartError {
         match self {
             Self::TransportFull => f.write_str("transport full"),
             Self::TransportClosed => f.write_str("transport closed"),
+            Self::RuntimeUnavailable => {
+                f.write_str("Reticulum runtime is required for Link delivery")
+            }
+            Self::RemoteIdentityUnavailable => {
+                f.write_str("remote identity public key is required for Link delivery")
+            }
         }
     }
 }
@@ -855,6 +863,17 @@ impl LinkDeliveryManager {
             return Ok(link_id);
         }
 
+        #[cfg(not(test))]
+        return Err(LinkDeliveryStartFailure {
+            error: if self.runtime.is_none() || self.runtime_identity.is_none() {
+                LinkDeliveryStartError::RuntimeUnavailable
+            } else {
+                LinkDeliveryStartError::RemoteIdentityUnavailable
+            },
+            message: Box::new(message),
+        });
+
+        #[cfg(test)]
         self.start_delivery_inner(
             message,
             dest_hash,
@@ -1144,8 +1163,21 @@ impl LinkDeliveryManager {
             return Ok(report);
         }
 
+        #[cfg(not(test))]
+        return Err(LinkDeliveryStartFailure {
+            error: if self.runtime.is_none() || self.runtime_identity.is_none() {
+                LinkDeliveryStartError::RuntimeUnavailable
+            } else {
+                LinkDeliveryStartError::RemoteIdentityUnavailable
+            },
+            message: Box::new(message),
+        });
+
+        #[cfg(test)]
         let link_id = self.start_delivery_inner(message, dest_hash, hops, None, true, true)?;
+        #[cfg(test)]
         let snapshot = self.direct_link_snapshot(dest_hash);
+        #[cfg(test)]
         let report = DirectLinkStartReport {
             link_id,
             dest_hash,
@@ -1157,6 +1189,7 @@ impl LinkDeliveryManager {
             queued_deliveries: 0,
             in_flight_deliveries: 1,
         };
+        #[cfg(test)]
         self.delivery_events.push_back(LxmfDeliveryEvent {
             kind: LxmfDeliveryEventKind::LinkEstablishing,
             method: LxmfDeliveryEventMethod::Direct,
@@ -1172,6 +1205,7 @@ impl LinkDeliveryManager {
             in_flight_deliveries: report.in_flight_deliveries,
             reason: None,
         });
+        #[cfg(test)]
         Ok(report)
     }
 

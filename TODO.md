@@ -24,6 +24,8 @@
   `LinkDeliveryManager`.
 - [x] Перевести propagation deposits на одноразовый runtime-owned
   `LinkSessionHandle` с identification до отправки и закрытием после proof.
+- [x] Отключить legacy Link/Resource fallback для production-сборок:
+  Direct и propagation требуют настроенный `ReticulumHandle`.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
   tools, examples, CLI и doc tests.
 
