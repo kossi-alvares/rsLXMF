@@ -46,6 +46,8 @@
   `ReticulumHandle`; сохранить независимые тесты LXMF backchannel-состояний.
 - [x] Удалить legacy Link variant, transfer state и transport event channel из
   модели `LinkDeliveryManager`; исходящие сессии теперь только runtime-owned.
+- [x] Физически удалить из `link_delivery.rs` отключённые legacy inbound
+  handlers, ручную ветку `tick()` и Link/Resource wire helpers.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
