@@ -8,5 +8,10 @@ publish = false
 
 [dependencies]
 lxmf-core = { workspace = true }
+rns-crypto = { workspace = true }
 rns-identity = { workspace = true }
+rns-runtime = { workspace = true }
+rns-transport = { workspace = true }
+bytes = { workspace = true }
 hex = { workspace = true }
+tokio = { workspace = true }
