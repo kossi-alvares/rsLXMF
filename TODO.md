@@ -68,7 +68,7 @@
   миграции они больше не нужны rsLXMF.
 - [ ] Добавить интеграционные сетевые тесты для:
   - [x] direct delivery короткого сообщения между двумя `LinkManager`;
-  - [ ] direct delivery через Resource;
+  - [x] direct delivery через Resource между двумя `LinkManager`;
   - [ ] повторного использования Direct Link;
   - [ ] backchannel delivery;
   - [ ] propagation download и peer sync через shared instance.
