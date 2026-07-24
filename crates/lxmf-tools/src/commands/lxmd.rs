@@ -2479,11 +2479,15 @@ impl LxmdRunner {
 
     fn ensure_link_delivery(&mut self) {
         if self.link_delivery.is_none() {
-            self.link_delivery = Some(lxmf_core::link_delivery::LinkDeliveryManager::new(
+            let mut manager = lxmf_core::link_delivery::LinkDeliveryManager::new(
                 self.transport_tx.clone(),
                 Some(self.identity.get_public_key()),
                 self.identity.get_signing_key(),
-            ));
+            );
+            if let Some(runtime) = self.runtime.clone() {
+                manager.set_runtime(runtime, self.identity.clone());
+            }
+            self.link_delivery = Some(manager);
         }
         self.ensure_backchannel_sender();
     }

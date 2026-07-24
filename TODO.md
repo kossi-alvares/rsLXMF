@@ -19,6 +19,9 @@
   rsReticulum (`542575b`).
 - [x] Расширить долгоживущий `LinkSession` high-level отправкой payload с
   автоматическим выбором packet/resource и ожиданием delivery proof.
+- [x] Перевести рабочий исходящий Direct path `lxmd` на runtime-owned
+  `LinkSessionHandle`, сохранив LXMF-очередь, retry и delivery events в
+  `LinkDeliveryManager`.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
   tools, examples, CLI и doc tests.
 
