@@ -340,6 +340,9 @@ Most daemon and control flags are implemented: `--config`, `--rnsconfig`,
 Additional rsLXMF-only flags: `--send`, `--send-file`, `--send-method`,
 `--send-timeout-secs`, and `--send-fields-json`.
 
+The detailed public API mapping and known differences from the Python
+reference are maintained in [API_COMPATIBILITY.md](API_COMPATIBILITY.md).
+
 ## Contributing
 
 If the issue or contribution belongs upstream as well, start there. Python LXMF
