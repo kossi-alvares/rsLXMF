@@ -1442,12 +1442,19 @@ impl LxmdRunner {
         // does not drive these.
         self.router.run_jobs_tick();
 
-        if let Some(ref mut ld) = self.link_delivery {
+        let link_delivery_results = if let Some(ref mut ld) = self.link_delivery {
             ld.drain_events(&self.known_identities);
             let results = ld.tick();
-            for result in results {
-                self.handle_link_delivery_result(result);
-            }
+            // lxmd currently has no UI consumer for semantic delivery events.
+            // Discard them after processing so the daemon does not retain an
+            // event history for its entire lifetime.
+            let _ = ld.take_delivery_events();
+            results
+        } else {
+            Vec::new()
+        };
+        for result in link_delivery_results {
+            self.handle_link_delivery_result(result);
         }
 
         if let Some(ref mut ps) = self.propagation_sync {

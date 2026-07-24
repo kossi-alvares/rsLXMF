@@ -32,6 +32,30 @@ use crate::propagation::hex_encode;
 const LINK_MAX_INACTIVITY: Duration = Duration::from_secs(600);
 const BACKCHANNEL_SEND_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const BACKCHANNEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(360);
+const DELIVERY_EVENT_QUEUE_CAPACITY: usize = 1024;
+
+/// Bounded event history for optional UI/diagnostic consumers.
+///
+/// Delivery itself must never depend on callers draining this queue. Keeping
+/// the newest events is more useful than retaining an unbounded history when
+/// an embedder does not consume them.
+#[derive(Default)]
+struct DeliveryEventQueue {
+    events: VecDeque<LxmfDeliveryEvent>,
+}
+
+impl DeliveryEventQueue {
+    fn push_back(&mut self, event: LxmfDeliveryEvent) {
+        if self.events.len() == DELIVERY_EVENT_QUEUE_CAPACITY {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+
+    fn drain(&mut self) -> impl Iterator<Item = LxmfDeliveryEvent> + '_ {
+        self.events.drain(..)
+    }
+}
 
 /// State of a link-based delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -543,7 +567,7 @@ pub struct LinkDeliveryManager {
     inbound_packet_tx: Option<mpsc::Sender<(Vec<u8>, [u8; 16])>>,
     pending_backchannel_starts: Vec<PendingBackchannelStart>,
     pending_backchannel_deliveries: HashMap<BackchannelProofKey, PendingBackchannelDelivery>,
-    delivery_events: VecDeque<LxmfDeliveryEvent>,
+    delivery_events: DeliveryEventQueue,
 }
 
 impl LinkDeliveryManager {
@@ -565,7 +589,7 @@ impl LinkDeliveryManager {
             inbound_packet_tx: None,
             pending_backchannel_starts: Vec::new(),
             pending_backchannel_deliveries: HashMap::new(),
-            delivery_events: VecDeque::new(),
+            delivery_events: DeliveryEventQueue::default(),
         }
     }
 
@@ -1521,7 +1545,7 @@ impl LinkDeliveryManager {
     }
 
     pub fn take_delivery_events(&mut self) -> Vec<LxmfDeliveryEvent> {
-        self.delivery_events.drain(..).collect()
+        self.delivery_events.drain().collect()
     }
 
     pub fn message_delivery_snapshot(&self, msg_hash: [u8; 32]) -> Option<MessageDeliverySnapshot> {
@@ -1771,7 +1795,7 @@ fn backchannel_delivery_event(input: BackchannelDeliveryEventInput<'_>) -> LxmfD
 }
 
 fn fail_backchannel_start(
-    events: &mut VecDeque<LxmfDeliveryEvent>,
+    events: &mut DeliveryEventQueue,
     start: PendingBackchannelStart,
     reason: String,
 ) -> DeliveryResult {
@@ -1807,7 +1831,7 @@ fn finish_unsuccessful_reusable_delivery(delivery: &mut PendingDelivery) {
 
 fn push_failed_delivery_and_queue(
     results: &mut Vec<DeliveryResult>,
-    events: &mut VecDeque<LxmfDeliveryEvent>,
+    events: &mut DeliveryEventQueue,
     link_id: [u8; 16],
     delivery: &mut PendingDelivery,
     reason: &str,
@@ -1831,7 +1855,7 @@ fn push_failed_delivery_and_queue(
 
 fn fail_queued_deliveries(
     results: &mut Vec<DeliveryResult>,
-    events: &mut VecDeque<LxmfDeliveryEvent>,
+    events: &mut DeliveryEventQueue,
     link_id: [u8; 16],
     delivery: &mut PendingDelivery,
     reason: &str,
@@ -1904,6 +1928,37 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let mgr = LinkDeliveryManager::new(tx, None, None);
         assert_eq!(mgr.pending_count(), 0);
+    }
+
+    #[test]
+    fn delivery_event_history_is_bounded_and_keeps_newest_events() {
+        let mut queue = DeliveryEventQueue::default();
+
+        for attempts in 0..DELIVERY_EVENT_QUEUE_CAPACITY as u32 + 10 {
+            queue.push_back(LxmfDeliveryEvent {
+                kind: LxmfDeliveryEventKind::TransferProgress,
+                method: LxmfDeliveryEventMethod::Direct,
+                link_id: [0x11; 16],
+                dest_hash: [0x22; 16],
+                msg_hash: None,
+                attempts,
+                progress: None,
+                representation: DeliveryRepresentation::Unknown,
+                link_state: LinkState::Active,
+                delivery_state: DeliveryState::Transferring,
+                queued_deliveries: 0,
+                in_flight_deliveries: 1,
+                reason: None,
+            });
+        }
+
+        let events: Vec<_> = queue.drain().collect();
+        assert_eq!(events.len(), DELIVERY_EVENT_QUEUE_CAPACITY);
+        assert_eq!(events.first().map(|event| event.attempts), Some(10));
+        assert_eq!(
+            events.last().map(|event| event.attempts),
+            Some(DELIVERY_EVENT_QUEUE_CAPACITY as u32 + 9)
+        );
     }
 
     #[test]
