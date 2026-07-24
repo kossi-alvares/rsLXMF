@@ -36,6 +36,8 @@
   `LinkSessionHandle` в rsReticulum.
 - [x] Перенести проверку Link identification из legacy Direct engine в тест
   runtime-owned `LinkSessionHandle` в rsReticulum.
+- [x] Удалить legacy wire-тесты исходящего Resource split/proof/reject/cancel;
+  протокольные состояния, сегментация и reassembly покрыты в rsReticulum.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
