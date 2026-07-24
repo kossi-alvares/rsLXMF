@@ -69,8 +69,8 @@
 - [ ] Добавить интеграционные сетевые тесты для:
   - [x] direct delivery короткого сообщения между двумя `LinkManager`;
   - [x] direct delivery через Resource между двумя `LinkManager`;
-  - [ ] повторного использования Direct Link;
-  - [ ] backchannel delivery;
+  - [x] повторного использования Direct Link;
+  - [x] backchannel delivery с proof после LINKIDENTIFY;
   - [ ] propagation download и peer sync через shared instance.
 - [ ] Сопоставить оставшийся публичный API rsLXMF с Python LXMF и зафиксировать
   известные несовпадения.
