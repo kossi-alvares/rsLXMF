@@ -2286,7 +2286,8 @@ impl LinkDeliveryManager {
         results
     }
 
-    pub fn handle_hmu(&mut self, link_id: &[u8; 16], hmu_data: &[u8]) {
+    #[cfg(test)]
+    fn handle_hmu(&mut self, link_id: &[u8; 16], hmu_data: &[u8]) {
         let event = if let Some(delivery) = self.pending.get_mut(link_id)
             && let Some(ref mut transfer) = delivery.network_transfer.transfer
         {
@@ -2319,7 +2320,8 @@ impl LinkDeliveryManager {
     /// The request returns a list of parts the receiver still needs; dispatch the resulting
     /// `SendPart` actions immediately rather than waiting for the next [`Self::tick`], since
     /// the receiver may time out and retry first.
-    pub fn handle_request(&mut self, link_id: &[u8; 16], request_data: &[u8]) {
+    #[cfg(test)]
+    fn handle_request(&mut self, link_id: &[u8; 16], request_data: &[u8]) {
         let event = {
             let Some(delivery) = self.pending.get_mut(link_id) else {
                 return;
@@ -2363,7 +2365,8 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound resource proof; returns `true` when the proof was accepted.
-    pub fn handle_resource_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
+    #[cfg(test)]
+    fn handle_resource_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         let mut event = None;
         let accepted = if let Some(delivery) = self.pending.get_mut(link_id)
             && let Some(ref mut transfer) = delivery.network_transfer.transfer
@@ -2398,7 +2401,8 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound receiver-cancel/reject for the current outbound resource.
-    pub fn handle_resource_reject(&mut self, link_id: &[u8; 16], reject_data: &[u8]) -> bool {
+    #[cfg(test)]
+    fn handle_resource_reject(&mut self, link_id: &[u8; 16], reject_data: &[u8]) -> bool {
         if reject_data.len() < 32 {
             return false;
         }
@@ -2456,7 +2460,8 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound link-packet proof; returns `true` when the packet delivery is complete.
-    pub fn handle_link_packet_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
+    #[cfg(test)]
+    fn handle_link_packet_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         if let Some(delivery) = self.pending.get_mut(link_id)
             && delivery.state == DeliveryState::AwaitingProof
             && let Some(packet_hash) = delivery.network_transfer.packet_proof_hash
@@ -2965,6 +2970,7 @@ fn delivery_resource_progress(delivery: &PendingDelivery) -> Option<f64> {
     Some((0.10 + aggregate * 0.90).clamp(0.10, 0.99))
 }
 
+#[cfg(test)]
 fn delivery_resource_proof_progress(delivery: &PendingDelivery) -> Option<f64> {
     let transfer = delivery.network_transfer.transfer.as_ref()?;
     let total_segments = transfer.resource.total_segments.max(1);
