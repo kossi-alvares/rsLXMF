@@ -559,14 +559,19 @@ fn spawn_runtime_payload_send(
     payload: Vec<u8>,
     auto_compress: bool,
     deadline: Duration,
+    identify_before_send: bool,
 ) -> oneshot::Receiver<Result<LinkPayloadSendReceipt, String>> {
     let (result_tx, result_rx) = oneshot::channel();
     tokio::spawn(async move {
+        if identify_before_send && let Err(error) = handle.identify().await {
+            let _ = result_tx.send(Err(error.to_string()));
+            return;
+        }
         let result = handle
             .send_payload(payload, auto_compress, deadline)
             .await
             .map_err(|error| error.to_string());
-        if result.is_ok() {
+        if result.is_ok() && !identify_before_send {
             let _ = handle.identify().await;
         }
         let _ = result_tx.send(result);
@@ -596,6 +601,7 @@ fn launch_runtime_current_delivery(delivery: &mut PendingDelivery) -> Result<(),
         payload,
         auto_compress,
         delivery.timeout,
+        false,
     ));
     delivery.state = DeliveryState::Transferring;
     delivery.started_at = Instant::now();
@@ -798,6 +804,57 @@ impl LinkDeliveryManager {
         packed_payload: Vec<u8>,
         auto_compress: bool,
     ) -> Result<[u8; 16], LinkDeliveryStartFailure> {
+        if let (Some(runtime), Some(identity), Some(public_key)) = (
+            self.runtime.as_ref(),
+            self.runtime_identity.as_ref(),
+            self.known_identities.get(&hex_encode(&dest_hash)),
+        ) {
+            let establishment_timeout_secs = ESTABLISHMENT_TIMEOUT_PER_HOP * (hops.max(1) as f64);
+            let timeout = Duration::from_secs_f64(establishment_timeout_secs + KEEPALIVE_DEFAULT);
+            let prepared = LinkSession::prepare_with_public_key(
+                runtime,
+                identity.clone(),
+                dest_hash,
+                *public_key,
+                hops,
+            );
+            let link_id = prepared.id();
+            let handle = prepared.spawn(Duration::from_secs_f64(establishment_timeout_secs));
+            let runtime_result = spawn_runtime_payload_send(
+                handle.clone(),
+                packed_payload,
+                auto_compress,
+                timeout,
+                true,
+            );
+            let msg_hash = message.hash;
+            self.pending.insert(
+                link_id,
+                PendingDelivery {
+                    message,
+                    dest_hash,
+                    packed_override: None,
+                    auto_compress,
+                    link: OutboundDeliveryLink::Runtime {
+                        handle,
+                        state: LinkState::Pending,
+                    },
+                    state: DeliveryState::Establishing,
+                    started_at: Instant::now(),
+                    network_transfer: LinkTransferState::default(),
+                    runtime_result: Some(runtime_result),
+                    establishment_timeout: Duration::from_secs_f64(establishment_timeout_secs),
+                    timeout,
+                    msg_hash,
+                    failure_reason: None,
+                    reusable: false,
+                    backchannel_identified: true,
+                    queue: DirectDeliveryQueue::default(),
+                },
+            );
+            return Ok(link_id);
+        }
+
         self.start_delivery_inner(
             message,
             dest_hash,
@@ -1028,8 +1085,13 @@ impl LinkDeliveryManager {
                     }
                 });
             }
-            let runtime_result =
-                spawn_runtime_payload_send(handle.clone(), packed, message.auto_compress, timeout);
+            let runtime_result = spawn_runtime_payload_send(
+                handle.clone(),
+                packed,
+                message.auto_compress,
+                timeout,
+                false,
+            );
             self.pending.insert(
                 link_id,
                 PendingDelivery {
@@ -1573,8 +1635,12 @@ impl LinkDeliveryManager {
                                 link_id: *link_id,
                                 msg_hash: delivery.msg_hash,
                             });
-                            delivery.state = DeliveryState::Idle;
-                            delivery.started_at = Instant::now();
+                            if delivery.reusable {
+                                delivery.state = DeliveryState::Idle;
+                                delivery.started_at = Instant::now();
+                            } else {
+                                remove_session = true;
+                            }
                         }
                         Err(reason) => {
                             delivery.link.set_state(LinkState::Closed);

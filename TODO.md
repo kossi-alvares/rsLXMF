@@ -22,6 +22,8 @@
 - [x] Перевести рабочий исходящий Direct path `lxmd` на runtime-owned
   `LinkSessionHandle`, сохранив LXMF-очередь, retry и delivery events в
   `LinkDeliveryManager`.
+- [x] Перевести propagation deposits на одноразовый runtime-owned
+  `LinkSessionHandle` с identification до отправки и закрытием после proof.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
   tools, examples, CLI и doc tests.
 
