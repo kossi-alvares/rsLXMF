@@ -26,6 +26,8 @@
   `LinkSessionHandle` с identification до отправки и закрытием после proof.
 - [x] Отключить legacy Link/Resource fallback для production-сборок:
   Direct и propagation требуют настроенный `ReticulumHandle`.
+- [x] Исключить legacy LinkRequest destination channel, transport errors и
+  inbound wire handlers из production-компиляции `LinkDeliveryManager`.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,

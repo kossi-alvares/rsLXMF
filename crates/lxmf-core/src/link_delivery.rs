@@ -21,6 +21,7 @@ use rns_protocol::resource::{
 };
 use rns_runtime::link_client::{LinkPayloadSendReceipt, LinkSession, LinkSessionHandle};
 use rns_runtime::reticulum::ReticulumHandle;
+#[cfg(test)]
 use rns_transport::link_messages::DestinationEvent;
 use rns_transport::messages::{OutboundRequest, TransportMessage};
 use tokio::sync::mpsc::error::TrySendError;
@@ -83,6 +84,7 @@ pub struct PendingDelivery {
 }
 
 enum OutboundDeliveryLink {
+    #[cfg(test)]
     Legacy(Link),
     Runtime {
         handle: LinkSessionHandle,
@@ -93,6 +95,7 @@ enum OutboundDeliveryLink {
 impl OutboundDeliveryLink {
     fn id(&self) -> [u8; 16] {
         match self {
+            #[cfg(test)]
             Self::Legacy(link) => link.link_id,
             Self::Runtime { handle, .. } => handle.id(),
         }
@@ -100,6 +103,7 @@ impl OutboundDeliveryLink {
 
     fn state(&self) -> LinkState {
         match self {
+            #[cfg(test)]
             Self::Legacy(link) => link.state,
             Self::Runtime { state, .. } => *state,
         }
@@ -107,6 +111,7 @@ impl OutboundDeliveryLink {
 
     fn set_state(&mut self, new_state: LinkState) {
         match self {
+            #[cfg(test)]
             Self::Legacy(link) => link.state = new_state,
             Self::Runtime { state, .. } => *state = new_state,
         }
@@ -119,6 +124,7 @@ impl OutboundDeliveryLink {
     fn runtime_handle(&self) -> Option<&LinkSessionHandle> {
         match self {
             Self::Runtime { handle, .. } => Some(handle),
+            #[cfg(test)]
             Self::Legacy(_) => None,
         }
     }
@@ -129,6 +135,7 @@ impl Deref for OutboundDeliveryLink {
 
     fn deref(&self) -> &Self::Target {
         match self {
+            #[cfg(test)]
             Self::Legacy(link) => link,
             Self::Runtime { .. } => panic!("runtime-owned Link has no application-side Link state"),
         }
@@ -138,6 +145,7 @@ impl Deref for OutboundDeliveryLink {
 impl DerefMut for OutboundDeliveryLink {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
+            #[cfg(test)]
             Self::Legacy(link) => link,
             Self::Runtime { .. } => panic!("runtime-owned Link has no application-side Link state"),
         }
@@ -288,7 +296,9 @@ struct PendingBackchannelDelivery {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkDeliveryStartError {
+    #[cfg(test)]
     TransportFull,
+    #[cfg(test)]
     TransportClosed,
     RuntimeUnavailable,
     RemoteIdentityUnavailable,
@@ -297,7 +307,9 @@ pub enum LinkDeliveryStartError {
 impl fmt::Display for LinkDeliveryStartError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(test)]
             Self::TransportFull => f.write_str("transport full"),
+            #[cfg(test)]
             Self::TransportClosed => f.write_str("transport closed"),
             Self::RuntimeUnavailable => {
                 f.write_str("Reticulum runtime is required for Link delivery")
@@ -555,6 +567,7 @@ impl fmt::Display for LinkDeliveryStartFailure {
 
 impl std::error::Error for LinkDeliveryStartFailure {}
 
+#[cfg(test)]
 fn start_error_from_reserve(err: TrySendError<()>) -> LinkDeliveryStartError {
     match err {
         TrySendError::Full(_) => LinkDeliveryStartError::TransportFull,
@@ -637,7 +650,9 @@ pub struct LinkDeliveryManager {
     pending_backchannel_deliveries: HashMap<BackchannelProofKey, PendingBackchannelDelivery>,
     identity_pub: Option<[u8; 64]>,
     identity_key: Option<Ed25519PrivateKey>,
+    #[cfg(test)]
     event_tx: mpsc::Sender<DestinationEvent>,
+    #[cfg(test)]
     event_rx: mpsc::Receiver<DestinationEvent>,
     delivery_events: VecDeque<LxmfDeliveryEvent>,
 }
@@ -648,6 +663,7 @@ impl LinkDeliveryManager {
         identity_pub: Option<[u8; 64]>,
         identity_key: Option<Ed25519PrivateKey>,
     ) -> Self {
+        #[cfg(test)]
         let (event_tx, event_rx) = mpsc::channel(256);
         Self {
             transport_tx,
@@ -663,7 +679,9 @@ impl LinkDeliveryManager {
             pending_backchannel_deliveries: HashMap::new(),
             identity_pub,
             identity_key,
+            #[cfg(test)]
             event_tx,
+            #[cfg(test)]
             event_rx,
             delivery_events: VecDeque::new(),
         }
@@ -1209,6 +1227,7 @@ impl LinkDeliveryManager {
         Ok(report)
     }
 
+    #[cfg(test)]
     fn start_delivery_inner(
         &mut self,
         message: LxMessage,
@@ -1342,81 +1361,44 @@ impl LinkDeliveryManager {
     /// and `ResourcePrf` contexts to their handlers.
     pub fn drain_events(&mut self, known_identities: &HashMap<String, [u8; 64]>) {
         self.known_identities.clone_from(known_identities);
-        let mut events = Vec::new();
-        while let Ok(event) = self.event_rx.try_recv() {
-            events.push(event);
-        }
+        #[cfg(test)]
+        {
+            let mut events = Vec::new();
+            while let Ok(event) = self.event_rx.try_recv() {
+                events.push(event);
+            }
 
-        for event in events {
-            match event {
-                DestinationEvent::LinkClosed { link_id } => {
-                    self.handle_link_closed(&link_id, None);
-                }
-                DestinationEvent::InboundPacket { raw, .. } => {
-                    let (header, data_offset) = match rns_wire::header::PacketHeader::unpack(&raw) {
-                        Ok(h) => h,
-                        Err(_) => continue,
-                    };
-                    let data = if raw.len() > data_offset {
-                        &raw[data_offset..]
-                    } else {
-                        &[]
-                    };
-                    let link_id = header.destination_hash;
+            for event in events {
+                match event {
+                    DestinationEvent::LinkClosed { link_id } => {
+                        self.handle_link_closed(&link_id, None);
+                    }
+                    DestinationEvent::InboundPacket { raw, .. } => {
+                        let (header, data_offset) =
+                            match rns_wire::header::PacketHeader::unpack(&raw) {
+                                Ok(h) => h,
+                                Err(_) => continue,
+                            };
+                        let data = if raw.len() > data_offset {
+                            &raw[data_offset..]
+                        } else {
+                            &[]
+                        };
+                        let link_id = header.destination_hash;
 
-                    match header.context {
-                        rns_wire::context::PacketContext::Lrproof
-                            if header.flags.packet_type == rns_wire::flags::PacketType::Proof =>
-                        {
-                            let dest_hex =
-                                self.pending.get(&link_id).map(|d| hex_encode(&d.dest_hash));
-
-                            if let Some(dest_hex) = dest_hex {
-                                if let Some(pub_key) = known_identities.get(&dest_hex) {
-                                    let ed25519_bytes: [u8; 32] = pub_key[32..64]
-                                        .try_into()
-                                        .expect("known_identities values are [u8; 64]; slice [32..64] is always 32 bytes");
-                                    if let Ok(verify_key) =
-                                        Ed25519PublicKey::from_bytes(&ed25519_bytes)
-                                    {
-                                        self.handle_link_proof(
-                                            &link_id,
-                                            data,
-                                            &verify_key,
-                                            &ed25519_bytes,
-                                        );
-                                    }
-                                } else {
-                                    tracing::warn!(
-                                        link_id = %hex_encode(&link_id),
-                                        dest = %dest_hex,
-                                        "LRPROOF received but destination identity key is not cached; ignoring proof"
-                                    );
-                                }
-                            }
-                        }
-                        rns_wire::context::PacketContext::None
-                            if header.flags.packet_type == rns_wire::flags::PacketType::Proof =>
-                        {
-                            // Python `Link.prove_packet()` sends packet proofs on a LINK
-                            // destination with PROOF type and the default/None context. LRPROOF
-                            // handling also accepts None on some older paths, so disambiguate by
-                            // the delivery state.
-                            if self
-                                .pending
-                                .get(&link_id)
-                                .is_some_and(|d| d.state == DeliveryState::AwaitingProof)
+                        match header.context {
+                            rns_wire::context::PacketContext::Lrproof
+                                if header.flags.packet_type
+                                    == rns_wire::flags::PacketType::Proof =>
                             {
-                                self.handle_link_packet_proof(&link_id, data);
-                            } else {
                                 let dest_hex =
                                     self.pending.get(&link_id).map(|d| hex_encode(&d.dest_hash));
 
                                 if let Some(dest_hex) = dest_hex {
                                     if let Some(pub_key) = known_identities.get(&dest_hex) {
                                         let ed25519_bytes: [u8; 32] = pub_key[32..64]
-                                            .try_into()
-                                            .expect("known_identities values are [u8; 64]; slice [32..64] is always 32 bytes");
+                                        .try_into()
+                                        .expect("known_identities values are [u8; 64]; slice [32..64] is always 32 bytes");
                                         if let Ok(verify_key) =
                                             Ed25519PublicKey::from_bytes(&ed25519_bytes)
                                         {
@@ -1436,70 +1418,117 @@ impl LinkDeliveryManager {
                                     }
                                 }
                             }
-                        }
-                        rns_wire::context::PacketContext::LinkProof
-                            if header.flags.packet_type == rns_wire::flags::PacketType::Proof =>
-                        {
-                            self.handle_link_packet_proof(&link_id, data);
-                        }
-                        rns_wire::context::PacketContext::None
-                            if header.flags.packet_type == rns_wire::flags::PacketType::Data =>
-                        {
-                            self.handle_inbound_link_packet(
-                                &link_id,
-                                &raw,
-                                header.flags.header_type,
-                                data,
-                            );
-                        }
-                        rns_wire::context::PacketContext::ResourceHmu => {
-                            let plaintext = self
-                                .pending
-                                .get(&link_id)
-                                .and_then(|d| d.link.decrypt(data).ok());
-                            if let Some(pt) = plaintext {
-                                self.handle_hmu(&link_id, &pt);
+                            rns_wire::context::PacketContext::None
+                                if header.flags.packet_type
+                                    == rns_wire::flags::PacketType::Proof =>
+                            {
+                                // Python `Link.prove_packet()` sends packet proofs on a LINK
+                                // destination with PROOF type and the default/None context. LRPROOF
+                                // handling also accepts None on some older paths, so disambiguate by
+                                // the delivery state.
+                                if self
+                                    .pending
+                                    .get(&link_id)
+                                    .is_some_and(|d| d.state == DeliveryState::AwaitingProof)
+                                {
+                                    self.handle_link_packet_proof(&link_id, data);
+                                } else {
+                                    let dest_hex = self
+                                        .pending
+                                        .get(&link_id)
+                                        .map(|d| hex_encode(&d.dest_hash));
+
+                                    if let Some(dest_hex) = dest_hex {
+                                        if let Some(pub_key) = known_identities.get(&dest_hex) {
+                                            let ed25519_bytes: [u8; 32] = pub_key[32..64]
+                                            .try_into()
+                                            .expect("known_identities values are [u8; 64]; slice [32..64] is always 32 bytes");
+                                            if let Ok(verify_key) =
+                                                Ed25519PublicKey::from_bytes(&ed25519_bytes)
+                                            {
+                                                self.handle_link_proof(
+                                                    &link_id,
+                                                    data,
+                                                    &verify_key,
+                                                    &ed25519_bytes,
+                                                );
+                                            }
+                                        } else {
+                                            tracing::warn!(
+                                                link_id = %hex_encode(&link_id),
+                                                dest = %dest_hex,
+                                                "LRPROOF received but destination identity key is not cached; ignoring proof"
+                                            );
+                                        }
+                                    }
+                                }
                             }
-                        }
-                        rns_wire::context::PacketContext::ResourceReq => {
-                            // Python `Resource.request_next` may arrive before any HMU and be the
-                            // only signal to advance the transfer, so drive it here directly.
-                            let plaintext = self
-                                .pending
-                                .get(&link_id)
-                                .and_then(|d| d.link.decrypt(data).ok());
-                            if let Some(pt) = plaintext {
-                                self.handle_request(&link_id, &pt);
+                            rns_wire::context::PacketContext::LinkProof
+                                if header.flags.packet_type
+                                    == rns_wire::flags::PacketType::Proof =>
+                            {
+                                self.handle_link_packet_proof(&link_id, data);
                             }
-                        }
-                        rns_wire::context::PacketContext::ResourcePrf => {
-                            // PROOF+RESOURCE_PRF is plaintext on a Proof packet (Packet.py:195-197).
-                            // Body = resource_hash(32) || proof(32); pass through without decrypt.
-                            self.handle_resource_proof(&link_id, data);
-                        }
-                        rns_wire::context::PacketContext::ResourceRcl => {
-                            // Receiver-cancel/reject packets are link-encrypted and carry
-                            // the rejected resource_hash.
-                            let plaintext = self
-                                .pending
-                                .get(&link_id)
-                                .and_then(|d| d.link.decrypt(data).ok());
-                            if let Some(pt) = plaintext {
-                                self.handle_resource_reject(&link_id, &pt);
+                            rns_wire::context::PacketContext::None
+                                if header.flags.packet_type
+                                    == rns_wire::flags::PacketType::Data =>
+                            {
+                                self.handle_inbound_link_packet(
+                                    &link_id,
+                                    &raw,
+                                    header.flags.header_type,
+                                    data,
+                                );
                             }
-                        }
-                        rns_wire::context::PacketContext::Keepalive => {
-                            if let Some(delivery) = self.pending.get_mut(&link_id) {
-                                delivery.link.record_inbound();
+                            rns_wire::context::PacketContext::ResourceHmu => {
+                                let plaintext = self
+                                    .pending
+                                    .get(&link_id)
+                                    .and_then(|d| d.link.decrypt(data).ok());
+                                if let Some(pt) = plaintext {
+                                    self.handle_hmu(&link_id, &pt);
+                                }
                             }
+                            rns_wire::context::PacketContext::ResourceReq => {
+                                // Python `Resource.request_next` may arrive before any HMU and be the
+                                // only signal to advance the transfer, so drive it here directly.
+                                let plaintext = self
+                                    .pending
+                                    .get(&link_id)
+                                    .and_then(|d| d.link.decrypt(data).ok());
+                                if let Some(pt) = plaintext {
+                                    self.handle_request(&link_id, &pt);
+                                }
+                            }
+                            rns_wire::context::PacketContext::ResourcePrf => {
+                                // PROOF+RESOURCE_PRF is plaintext on a Proof packet (Packet.py:195-197).
+                                // Body = resource_hash(32) || proof(32); pass through without decrypt.
+                                self.handle_resource_proof(&link_id, data);
+                            }
+                            rns_wire::context::PacketContext::ResourceRcl => {
+                                // Receiver-cancel/reject packets are link-encrypted and carry
+                                // the rejected resource_hash.
+                                let plaintext = self
+                                    .pending
+                                    .get(&link_id)
+                                    .and_then(|d| d.link.decrypt(data).ok());
+                                if let Some(pt) = plaintext {
+                                    self.handle_resource_reject(&link_id, &pt);
+                                }
+                            }
+                            rns_wire::context::PacketContext::Keepalive => {
+                                if let Some(delivery) = self.pending.get_mut(&link_id) {
+                                    delivery.link.record_inbound();
+                                }
+                            }
+                            rns_wire::context::PacketContext::LinkClose => {
+                                self.handle_link_closed(&link_id, Some(data));
+                            }
+                            _ => {}
                         }
-                        rns_wire::context::PacketContext::LinkClose => {
-                            self.handle_link_closed(&link_id, Some(data));
-                        }
-                        _ => {}
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
@@ -1563,6 +1592,7 @@ impl LinkDeliveryManager {
         }
     }
 
+    #[cfg(test)]
     fn handle_inbound_link_packet(
         &mut self,
         link_id: &[u8; 16],
@@ -2391,6 +2421,7 @@ impl LinkDeliveryManager {
         false
     }
 
+    #[cfg(test)]
     fn handle_link_closed(
         &mut self,
         link_id: &[u8; 16],
