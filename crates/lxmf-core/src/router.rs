@@ -7,7 +7,6 @@ use crate::now_f64;
 use std::collections::HashMap;
 use std::fmt;
 
-use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::constants::*;
@@ -1671,31 +1670,12 @@ impl LxmRouter {
                             // Python LXMessage.__as_packet strips the destination
                             // hash before encryption because the RNS packet
                             // header already carries it.
-                            let flags = rns_wire::flags::PacketFlags {
-                                header_type: rns_wire::flags::HeaderType::Header1,
-                                context_flag: false,
-                                transport_type: rns_wire::flags::TransportType::Broadcast,
-                                destination_type: rns_wire::flags::DestinationType::Single,
-                                packet_type: rns_wire::flags::PacketType::Data,
-                            };
-                            let header = rns_wire::header::PacketHeader {
-                                flags,
-                                hops: 0,
-                                transport_id: None,
-                                destination_hash: dest_hash,
-                                context: rns_wire::context::PacketContext::None,
-                            };
-                            let mut raw = header.pack();
-                            raw.extend_from_slice(&packet_payload);
-
-                            if transport_tx
-                                .try_send(rns_transport::messages::TransportMessage::Outbound(
-                                    rns_transport::messages::OutboundRequest {
-                                        raw: Bytes::from(raw),
-                                        destination_hash: dest_hash,
-                                    },
-                                ))
-                                .is_ok()
+                            if rns_runtime::application::try_send_pre_encrypted_packet_on_transport(
+                                &transport_tx,
+                                dest_hash,
+                                &packet_payload,
+                            )
+                            .is_ok()
                                 && message.state == MessageState::Sending
                             {
                                 message.mark_sent();
