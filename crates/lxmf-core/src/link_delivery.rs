@@ -7,38 +7,19 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-#[cfg(test)]
-use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
-#[cfg(test)]
-use bytes::Bytes;
 use rns_crypto::ed25519::Ed25519PrivateKey;
-#[cfg(test)]
-use rns_crypto::ed25519::Ed25519PublicKey;
 use rns_identity::identity::Identity;
 use rns_link::constants::{ESTABLISHMENT_TIMEOUT_PER_HOP, KEEPALIVE_DEFAULT};
 use rns_link::link::LinkState;
-#[cfg(test)]
-use rns_link::link::{CloseReason, Link, LinkAction};
-#[cfg(test)]
-use rns_protocol::resource::{
-    MAX_EFFICIENT_SIZE, MultiSegmentOutbound, OutboundResource, OutboundTransfer, ResourceError,
-    TransferAction,
-};
 use rns_runtime::link_client::{LinkPayloadSendReceipt, LinkSession, LinkSessionHandle};
 use rns_runtime::reticulum::ReticulumHandle;
-#[cfg(test)]
-use rns_transport::link_messages::DestinationEvent;
-#[cfg(test)]
-use rns_transport::messages::OutboundRequest;
 use rns_transport::messages::TransportMessage;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::constants::DeliveryRepresentation;
-#[cfg(test)]
-use crate::constants::LXMF_OVERHEAD;
 use crate::message::LxMessage;
 use crate::propagation::hex_encode;
 
@@ -70,10 +51,6 @@ pub struct PendingDelivery {
     link: OutboundDeliveryLink,
     pub state: DeliveryState,
     pub started_at: Instant,
-    /// Reticulum-owned transfer and proof tracking. Keeping this separate from
-    /// LXMF message/queue state makes it replaceable by `LinkSession` results.
-    #[cfg(test)]
-    network_transfer: LinkTransferState,
     runtime_result: Option<oneshot::Receiver<Result<LinkPayloadSendReceipt, String>>>,
     /// Link establishment timeout. This intentionally excludes keepalive time:
     /// an initiator that never receives LRPROOF should fail on the Link
@@ -96,9 +73,6 @@ pub struct PendingDelivery {
 }
 
 enum OutboundDeliveryLink {
-    #[cfg(test)]
-    #[allow(dead_code)]
-    Legacy(Link),
     Runtime {
         handle: LinkSessionHandle,
         state: LinkState,
@@ -108,24 +82,18 @@ enum OutboundDeliveryLink {
 impl OutboundDeliveryLink {
     fn id(&self) -> [u8; 16] {
         match self {
-            #[cfg(test)]
-            Self::Legacy(link) => link.link_id,
             Self::Runtime { handle, .. } => handle.id(),
         }
     }
 
     fn state(&self) -> LinkState {
         match self {
-            #[cfg(test)]
-            Self::Legacy(link) => link.state,
             Self::Runtime { state, .. } => *state,
         }
     }
 
     fn set_state(&mut self, new_state: LinkState) {
         match self {
-            #[cfg(test)]
-            Self::Legacy(link) => link.state = new_state,
             Self::Runtime { state, .. } => *state = new_state,
         }
     }
@@ -137,32 +105,6 @@ impl OutboundDeliveryLink {
     fn runtime_handle(&self) -> Option<&LinkSessionHandle> {
         match self {
             Self::Runtime { handle, .. } => Some(handle),
-            #[cfg(test)]
-            Self::Legacy(_) => None,
-        }
-    }
-}
-
-#[cfg(test)]
-impl Deref for OutboundDeliveryLink {
-    type Target = Link;
-
-    fn deref(&self) -> &Self::Target {
-        match self {
-            #[cfg(test)]
-            Self::Legacy(link) => link,
-            Self::Runtime { .. } => panic!("runtime-owned Link has no application-side Link state"),
-        }
-    }
-}
-
-#[cfg(test)]
-impl DerefMut for OutboundDeliveryLink {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            #[cfg(test)]
-            Self::Legacy(link) => link,
-            Self::Runtime { .. } => panic!("runtime-owned Link has no application-side Link state"),
         }
     }
 }
@@ -174,18 +116,6 @@ struct QueuedDelivery {
     auto_compress: bool,
     msg_hash: Option<[u8; 32]>,
     queued_at: Instant,
-}
-
-/// Low-level state used only by the legacy in-process Reticulum transfer
-/// driver. LXMF queueing and retry policy must not be added here.
-#[cfg(test)]
-#[derive(Default)]
-struct LinkTransferState {
-    transfer: Option<OutboundTransfer>,
-    /// Remaining segments after the transfer currently in `transfer`.
-    remaining_segments: Vec<OutboundResource>,
-    /// Hash addressed by a single-packet LINKPROOF.
-    packet_proof_hash: Option<[u8; 32]>,
 }
 
 /// FIFO policy for messages sharing one reusable Direct Link.
@@ -272,10 +202,6 @@ impl PendingDelivery {
         self.message = next.message;
         self.packed_override = next.packed_override;
         self.auto_compress = next.auto_compress;
-        #[cfg(test)]
-        {
-            self.network_transfer = LinkTransferState::default();
-        }
         self.started_at = Instant::now();
         self.msg_hash = next.msg_hash;
         self.failure_reason = None;
@@ -659,12 +585,6 @@ pub struct LinkDeliveryManager {
     inbound_packet_tx: Option<mpsc::Sender<(Vec<u8>, [u8; 16])>>,
     pending_backchannel_starts: Vec<PendingBackchannelStart>,
     pending_backchannel_deliveries: HashMap<BackchannelProofKey, PendingBackchannelDelivery>,
-    #[cfg(test)]
-    identity_pub: Option<[u8; 64]>,
-    #[cfg(test)]
-    identity_key: Option<Ed25519PrivateKey>,
-    #[cfg(test)]
-    event_rx: mpsc::Receiver<DestinationEvent>,
     delivery_events: VecDeque<LxmfDeliveryEvent>,
 }
 
@@ -674,9 +594,6 @@ impl LinkDeliveryManager {
         identity_pub: Option<[u8; 64]>,
         identity_key: Option<Ed25519PrivateKey>,
     ) -> Self {
-        #[cfg(test)]
-        let (_event_tx, event_rx) = mpsc::channel(256);
-        #[cfg(not(test))]
         let _ = (identity_pub, identity_key);
         Self {
             transport_tx,
@@ -690,12 +607,6 @@ impl LinkDeliveryManager {
             inbound_packet_tx: None,
             pending_backchannel_starts: Vec::new(),
             pending_backchannel_deliveries: HashMap::new(),
-            #[cfg(test)]
-            identity_pub,
-            #[cfg(test)]
-            identity_key,
-            #[cfg(test)]
-            event_rx,
             delivery_events: VecDeque::new(),
         }
     }
@@ -880,8 +791,6 @@ impl LinkDeliveryManager {
                     },
                     state: DeliveryState::Establishing,
                     started_at: Instant::now(),
-                    #[cfg(test)]
-                    network_transfer: LinkTransferState::default(),
                     runtime_result: Some(runtime_result),
                     establishment_timeout: Duration::from_secs_f64(establishment_timeout_secs),
                     timeout,
@@ -1145,8 +1054,6 @@ impl LinkDeliveryManager {
                     },
                     state: DeliveryState::Establishing,
                     started_at: Instant::now(),
-                    #[cfg(test)]
-                    network_transfer: LinkTransferState::default(),
                     runtime_result: Some(runtime_result),
                     establishment_timeout: Duration::from_secs_f64(establishment_timeout_secs),
                     timeout,
@@ -1195,13 +1102,10 @@ impl LinkDeliveryManager {
         })
     }
 
-    /// Drain inbound transport events and dispatch by packet context.
-    ///
-    /// Call before [`Self::tick`] each cycle. Routes `LRPROOF`, `ResourceHmu`, `ResourceReq`,
-    /// and `ResourcePrf` contexts to their handlers.
+    /// Refresh destination public keys used when opening runtime-owned links.
     pub fn drain_events(&mut self, known_identities: &HashMap<String, [u8; 64]>) {
         self.known_identities.clone_from(known_identities);
-        #[cfg(test)]
+        #[cfg(any())]
         {
             let mut events = Vec::new();
             while let Ok(event) = self.event_rx.try_recv() {
@@ -1375,7 +1279,7 @@ impl LinkDeliveryManager {
 
     /// Validate an inbound `LRPROOF`, complete the handshake, and transition to
     /// [`DeliveryState::Identifying`].
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_link_proof(
         &mut self,
         link_id: &[u8; 16],
@@ -1433,7 +1337,7 @@ impl LinkDeliveryManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_inbound_link_packet(
         &mut self,
         link_id: &[u8; 16],
@@ -1581,7 +1485,7 @@ impl LinkDeliveryManager {
             #[cfg(not(test))]
             unreachable!("production delivery must use a runtime-owned Link session");
 
-            #[cfg(test)]
+            #[cfg(any())]
             {
                 if delivery.state == DeliveryState::Idle
                     && !delivery.queue.is_empty()
@@ -1992,14 +1896,6 @@ impl LinkDeliveryManager {
                         let _ = handle.close().await;
                     });
                 }
-                #[cfg(test)]
-                if delivery.link.runtime_handle().is_none() {
-                    let mut delivery = delivery;
-                    send_link_teardown(&self.transport_tx, &link_id, &mut delivery.link);
-                    let _ = self
-                        .transport_tx
-                        .try_send(TransportMessage::DeregisterDestination { hash: link_id });
-                }
             }
         }
 
@@ -2141,7 +2037,7 @@ impl LinkDeliveryManager {
         results
     }
 
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_hmu(&mut self, link_id: &[u8; 16], hmu_data: &[u8]) {
         let event = if let Some(delivery) = self.pending.get_mut(link_id)
             && let Some(ref mut transfer) = delivery.network_transfer.transfer
@@ -2175,7 +2071,7 @@ impl LinkDeliveryManager {
     /// The request returns a list of parts the receiver still needs; dispatch the resulting
     /// `SendPart` actions immediately rather than waiting for the next [`Self::tick`], since
     /// the receiver may time out and retry first.
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_request(&mut self, link_id: &[u8; 16], request_data: &[u8]) {
         let event = {
             let Some(delivery) = self.pending.get_mut(link_id) else {
@@ -2220,7 +2116,7 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound resource proof; returns `true` when the proof was accepted.
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_resource_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         let mut event = None;
         let accepted = if let Some(delivery) = self.pending.get_mut(link_id)
@@ -2256,7 +2152,7 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound receiver-cancel/reject for the current outbound resource.
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_resource_reject(&mut self, link_id: &[u8; 16], reject_data: &[u8]) -> bool {
         if reject_data.len() < 32 {
             return false;
@@ -2280,7 +2176,7 @@ impl LinkDeliveryManager {
         false
     }
 
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_link_closed(
         &mut self,
         link_id: &[u8; 16],
@@ -2315,7 +2211,7 @@ impl LinkDeliveryManager {
     }
 
     /// Apply an inbound link-packet proof; returns `true` when the packet delivery is complete.
-    #[cfg(test)]
+    #[cfg(any())]
     fn handle_link_packet_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         if let Some(delivery) = self.pending.get_mut(link_id)
             && delivery.state == DeliveryState::AwaitingProof
@@ -2496,10 +2392,6 @@ impl LinkDeliveryManager {
                         let _ = handle.close().await;
                     });
                     delivery.link.set_state(LinkState::Closed);
-                }
-                #[cfg(test)]
-                if delivery.link.runtime_handle().is_none() {
-                    cancel_current_delivery(&self.transport_tx, link_id, delivery);
                 }
                 if delivery.reusable && delivery.link.is_active() {
                     finish_unsuccessful_reusable_delivery(delivery);
@@ -2826,7 +2718,7 @@ fn fail_backchannel_start(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn delivery_resource_progress(delivery: &PendingDelivery) -> Option<f64> {
     let transfer = delivery.network_transfer.transfer.as_ref()?;
     let total_segments = transfer.resource.total_segments.max(1);
@@ -2835,7 +2727,7 @@ fn delivery_resource_progress(delivery: &PendingDelivery) -> Option<f64> {
     Some((0.10 + aggregate * 0.90).clamp(0.10, 0.99))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn delivery_resource_proof_progress(delivery: &PendingDelivery) -> Option<f64> {
     let transfer = delivery.network_transfer.transfer.as_ref()?;
     let total_segments = transfer.resource.total_segments.max(1);
@@ -2844,12 +2736,12 @@ fn delivery_resource_proof_progress(delivery: &PendingDelivery) -> Option<f64> {
     Some((0.10 + aggregate * 0.90).clamp(0.10, 1.0))
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn should_update_resource_progress(current: f64, next: f64) -> bool {
     next > current && ((next * 100.0).floor() > (current * 100.0).floor() || next >= 0.99)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn maybe_push_resource_progress_event(
     events: &mut VecDeque<LxmfDeliveryEvent>,
     link_id: [u8; 16],
@@ -2871,7 +2763,7 @@ fn maybe_push_resource_progress_event(
     ));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn finish_reusable_delivery(
     transport_tx: &mpsc::Sender<TransportMessage>,
     identity_pub: &Option<[u8; 64]>,
@@ -2897,10 +2789,6 @@ fn finish_reusable_delivery(
 }
 
 fn finish_unsuccessful_reusable_delivery(delivery: &mut PendingDelivery) {
-    #[cfg(test)]
-    {
-        delivery.network_transfer = LinkTransferState::default();
-    }
     delivery.failure_reason = None;
 
     if delivery.link.is_active() && delivery.start_queued_delivery() {
@@ -2910,7 +2798,7 @@ fn finish_unsuccessful_reusable_delivery(delivery: &mut PendingDelivery) {
     delivery.state = DeliveryState::Idle;
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn cancel_current_delivery(
     transport_tx: &mpsc::Sender<TransportMessage>,
     link_id: &[u8; 16],
@@ -2938,10 +2826,6 @@ fn push_failed_delivery_and_queue(
     delivery: &mut PendingDelivery,
     reason: &str,
 ) {
-    #[cfg(test)]
-    {
-        delivery.network_transfer = LinkTransferState::default();
-    }
     events.push_back(delivery_event(
         LxmfDeliveryEventKind::Failed,
         link_id,
@@ -2984,7 +2868,7 @@ fn fail_queued_deliveries(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn send_link_identify(
     transport_tx: &mpsc::Sender<TransportMessage>,
     link_id: &[u8; 16],
@@ -3018,7 +2902,7 @@ fn send_link_identify(
         .is_ok()
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn drive_link_action(
     transport_tx: &mpsc::Sender<TransportMessage>,
     link_id: &[u8; 16],
@@ -3045,7 +2929,7 @@ fn drive_link_action(
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn send_keepalive_packet(transport_tx: &mpsc::Sender<TransportMessage>, link_id: &[u8; 16]) {
     let header = rns_wire::header::PacketHeader {
         flags: rns_wire::flags::PacketFlags {
@@ -3068,7 +2952,7 @@ fn send_keepalive_packet(transport_tx: &mpsc::Sender<TransportMessage>, link_id:
     }));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn send_link_close_payload(
     transport_tx: &mpsc::Sender<TransportMessage>,
     link_id: &[u8; 16],
@@ -3095,7 +2979,7 @@ fn send_link_close_payload(
     }));
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn link_data_idle_for(link: &Link) -> Duration {
     link.no_data_for().min(link.no_outbound_for())
 }
@@ -3107,18 +2991,10 @@ fn direct_link_idle_expired(delivery: &PendingDelivery) -> bool {
     {
         return false;
     }
-    if delivery.link.runtime_handle().is_some() {
-        return delivery.started_at.elapsed() > LINK_MAX_INACTIVITY;
-    }
-    #[cfg(test)]
-    {
-        return link_data_idle_for(&delivery.link) > LINK_MAX_INACTIVITY;
-    }
-    #[cfg(not(test))]
-    false
+    delivery.started_at.elapsed() > LINK_MAX_INACTIVITY
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn build_resource_transfer(
     link: &Link,
     packed: Vec<u8>,
@@ -3179,7 +3055,7 @@ pub enum DeliveryResult {
 }
 
 /// Outcome of dispatching one [`TransferAction`] onto the wire.
-#[cfg(test)]
+#[cfg(any())]
 enum ActionOutcome {
     /// Action dispatched, continue draining.
     Continue,
@@ -3193,7 +3069,7 @@ enum ActionOutcome {
 
 /// Send a single LXMF packet over an active link and return the full packet hash that the peer
 /// must prove with `LINKPROOF`.
-#[cfg(test)]
+#[cfg(any())]
 fn send_link_packet(
     link_id: &[u8; 16],
     delivery: &mut PendingDelivery,
@@ -3225,7 +3101,7 @@ fn send_link_packet(
     Some(packet_hash)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 fn send_link_teardown(
     transport_tx: &mpsc::Sender<TransportMessage>,
     link_id: &[u8; 16],
@@ -3265,11 +3141,6 @@ fn close_outbound_delivery_link(
             let _ = handle.close().await;
         });
     }
-    #[cfg(test)]
-    if link.runtime_handle().is_none() {
-        send_link_teardown(transport_tx, link_id, link);
-    }
-    #[cfg(not(test))]
     let _ = (transport_tx, link_id);
 }
 
@@ -3278,7 +3149,7 @@ fn close_outbound_delivery_link(
 /// Kept as a free function so it can be called from [`LinkDeliveryManager::tick`] and
 /// [`LinkDeliveryManager::handle_request`] without double-mutable-borrow conflicts on the
 /// manager.
-#[cfg(test)]
+#[cfg(any())]
 fn dispatch_action(
     link_id: &[u8; 16],
     delivery: &mut PendingDelivery,
