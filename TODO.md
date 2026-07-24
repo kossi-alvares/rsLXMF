@@ -1,0 +1,61 @@
+# TODO
+
+## Выполнено
+
+- [x] Перевести загрузку сообщений `PropagationClient` на публичный
+  `rns_runtime::link_client::LinkSession`.
+- [x] Добавить в rsReticulum открытие Link по уже известному публичному ключу
+  (`e8c1c8d`).
+- [x] Исправить возможность выполнять Link identification в фоновой Tokio-задаче
+  (`4a236de`).
+- [x] Перевести peer-to-peer `PropagationSyncTask` на `LinkSession` и общий
+  Resource API rsReticulum.
+- [x] Удалить из `PropagationClient` и `PropagationSyncTask` собственные
+  реализации Link handshake, request/response, Resource transfer и proof
+  processing (`d51b5e4`).
+- [x] Добавить в rsReticulum общий builder standalone announce-пакетов
+  (`221fa8b`).
+- [x] Перевести propagation и control announce в rsLXMF на общий announce API
+  rsReticulum (`542575b`).
+- [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
+  tools, examples, CLI и doc tests.
+
+## Следующие шаги
+
+- [ ] Разделить ответственность `LinkDeliveryManager`:
+  - оставить в rsLXMF очереди сообщений, retry-политику, LXMF-состояния и
+    backchannel-маршрутизацию;
+  - перенести установку Link, identification, отправку packet/resource и
+    обработку proofs на публичные API rsReticulum.
+- [ ] При необходимости расширить rsReticulum API для долгоживущих и повторно
+  используемых исходящих Link-сессий.
+- [ ] Сохранить поддержку входящих backchannel-ссылок через `LinkManager`,
+  убрав из rsLXMF ручную обработку Resource advertisement, parts, HMU и proofs.
+- [ ] Перевести opportunistic delivery с ручной сборки Reticulum DATA-пакета на
+  application-level API rsReticulum.
+- [ ] Удалить оставшиеся неиспользуемые структуры и зависимости низкого уровня
+  (`rns-link`, Resource transfer primitives и ручные wire headers), если после
+  миграции они больше не нужны rsLXMF.
+- [ ] Добавить интеграционные сетевые тесты для:
+  - direct delivery короткого сообщения;
+  - direct delivery через Resource;
+  - повторного использования Direct Link;
+  - backchannel delivery;
+  - propagation download и peer sync через shared instance.
+- [ ] Сопоставить оставшийся публичный API rsLXMF с Python LXMF и зафиксировать
+  известные несовпадения.
+- [ ] Выполнить финальный прогон `cargo check --workspace --all-targets` и
+  `cargo test --workspace` в обоих репозиториях.
+
+## Резюме за 24 июля 2026
+
+Сегодня загрузка сообщений с propagation node и синхронизация между
+propagation peers были переведены с собственных сетевых машин rsLXMF на
+публичные `LinkSession` и Resource API rsReticulum. Для этого в rsReticulum
+добавлено открытие Link по известному публичному ключу, исправлена task-safety
+identification и добавлен общий builder announce-пакетов.
+
+После переключения рабочих путей из rsLXMF удалено 2317 строк дублирующего
+Link/Resource-кода. Propagation и control announce теперь также формируются
+через rsReticulum. Полный набор тестов rsLXMF прошёл; изменения находятся
+только в ветках `dev`, push не выполнялся.
