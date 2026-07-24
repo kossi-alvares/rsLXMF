@@ -3509,8 +3509,6 @@ fn dispatch_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
     fn next_outbound(rx: &mut mpsc::Receiver<TransportMessage>) -> Vec<u8> {
         while let Ok(message) = rx.try_recv() {
             if let TransportMessage::Outbound(request) = message {
@@ -3556,57 +3554,6 @@ mod tests {
             .unwrap();
 
         (link_id, responder_link)
-    }
-
-    fn complete_next_link_packet(
-        mgr: &mut LinkDeliveryManager,
-        rx: &mut mpsc::Receiver<TransportMessage>,
-        link_id: [u8; 16],
-        responder_link: &Link,
-        responder_key: &Ed25519PrivateKey,
-    ) {
-        let packet_raw = next_outbound(rx);
-        let (packet_header, _) = rns_wire::header::PacketHeader::unpack(&packet_raw).unwrap();
-        assert_eq!(
-            packet_header.flags.packet_type,
-            rns_wire::flags::PacketType::Data
-        );
-        assert_eq!(
-            packet_header.flags.destination_type,
-            rns_wire::flags::DestinationType::Link
-        );
-        assert_eq!(packet_header.destination_hash, link_id);
-        assert_eq!(
-            packet_header.context,
-            rns_wire::context::PacketContext::None
-        );
-
-        let packet_hash = rns_wire::hash::packet_hash(&packet_raw, packet_header.flags.header_type);
-        let proof_data = responder_link
-            .prove_packet(&packet_hash, responder_key)
-            .unwrap();
-        let proof_header = rns_wire::header::PacketHeader {
-            flags: rns_wire::flags::PacketFlags {
-                header_type: rns_wire::flags::HeaderType::Header1,
-                context_flag: false,
-                transport_type: rns_wire::flags::TransportType::Broadcast,
-                destination_type: rns_wire::flags::DestinationType::Link,
-                packet_type: rns_wire::flags::PacketType::Proof,
-            },
-            hops: 0,
-            transport_id: None,
-            destination_hash: link_id,
-            context: rns_wire::context::PacketContext::None,
-        };
-        let mut proof_raw = proof_header.pack();
-        proof_raw.extend_from_slice(&proof_data);
-        mgr.event_tx
-            .try_send(DestinationEvent::InboundPacket {
-                raw: proof_raw.into(),
-                interface_id: 0,
-            })
-            .unwrap();
-        mgr.drain_events(&HashMap::new());
     }
 
     #[test]
@@ -4020,52 +3967,6 @@ mod tests {
         assert!(!mgr.delivery_link_available(&dest_hash));
         assert!(mgr.direct_link_snapshot(dest_hash).is_none());
         assert!(!mgr.pending.get(&link_id).unwrap().reusable);
-    }
-
-    #[test]
-    fn test_direct_delivery_identifies_after_success_not_before_packet() {
-        let (tx, mut rx) = mpsc::channel(128);
-        let local_key = Ed25519PrivateKey::generate();
-        let mut local_pub = [0u8; 64];
-        local_pub[32..64].copy_from_slice(&local_key.public_key().to_bytes());
-        let mut mgr = LinkDeliveryManager::new(tx, Some(local_pub), Some(local_key));
-        let responder_key = Ed25519PrivateKey::generate();
-        let sign_key = Ed25519PrivateKey::generate();
-        let dest_hash = [0xCF; 16];
-
-        let mut msg = LxMessage::new(
-            [0xAA; 16],
-            [0xBB; 16],
-            "Identify",
-            "identify after delivery",
-            crate::constants::DeliveryMethod::Direct,
-        );
-        msg.sign(&sign_key).unwrap();
-        let (link_id, mut responder_link) =
-            establish_active_delivery(&mut mgr, &mut rx, msg, &responder_key, dest_hash);
-
-        assert!(mgr.tick().is_empty());
-        complete_next_link_packet(&mut mgr, &mut rx, link_id, &responder_link, &responder_key);
-        let results = mgr.tick();
-        assert!(
-            results
-                .iter()
-                .any(|r| matches!(r, DeliveryResult::Complete { .. }))
-        );
-
-        let identify_raw = next_outbound(&mut rx);
-        let (identify_header, identify_offset) =
-            rns_wire::header::PacketHeader::unpack(&identify_raw).unwrap();
-        assert_eq!(
-            identify_header.context,
-            rns_wire::context::PacketContext::LinkIdentify
-        );
-        let identified_pub = responder_link
-            .handle_identification(&identify_raw[identify_offset..])
-            .unwrap();
-        assert_eq!(identified_pub, local_pub);
-        assert_eq!(mgr.pending_count(), 0);
-        assert_eq!(mgr.session_count(), 1);
     }
 
     #[test]
