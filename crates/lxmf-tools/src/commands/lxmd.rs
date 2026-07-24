@@ -41,6 +41,7 @@ use lxmf_tools::lxmd_runtime::{
     LxmdPaths, delivery_announce_app_data, preflight_control_command,
     propagation_announce_app_data, resolve_config_dirs,
 };
+#[cfg(test)]
 use rns_identity::announce::AnnounceData;
 use rns_identity::destination::Destination;
 use rns_identity::identity::Identity;
@@ -280,27 +281,18 @@ fn create_control_announce_packet(
     identity: &Identity,
     control_dest_hash: [u8; 16],
 ) -> Result<Vec<u8>, String> {
-    let announce = AnnounceData::create(identity, CONTROL_APP_NAME, None, None)
-        .map_err(|e| format!("Failed to create control announce: {e}"))?;
-    let payload = announce.pack();
-
-    let flags = rns_wire::flags::PacketFlags {
-        header_type: rns_wire::flags::HeaderType::Header1,
-        context_flag: false,
-        transport_type: rns_wire::flags::TransportType::Broadcast,
-        destination_type: rns_wire::flags::DestinationType::Single,
-        packet_type: rns_wire::flags::PacketType::Announce,
-    };
-    let header = rns_wire::header::PacketHeader {
-        flags,
-        hops: 0,
-        transport_id: None,
-        destination_hash: control_dest_hash,
-        context: rns_wire::context::PacketContext::None,
-    };
-
-    let mut raw = header.pack();
-    raw.extend_from_slice(&payload);
+    let (hash, raw) = rns_runtime::application::build_announce_packet(
+        identity,
+        CONTROL_APP_NAME,
+        None,
+        None,
+        false,
+        None,
+    )
+    .map_err(|e| format!("Failed to create control announce: {e}"))?;
+    if hash != control_dest_hash {
+        return Err("control destination hash does not match identity".to_string());
+    }
     Ok(raw)
 }
 
@@ -340,33 +332,18 @@ fn create_propagation_announce_packet_for(
     }
     let app_data = propagation_announce_app_data(&pn_data);
 
-    let announce = AnnounceData::create(
+    let (hash, raw) = rns_runtime::application::build_announce_packet(
         identity,
         "lxmf.propagation",
         Some(app_data.as_slice()),
         None,
+        false,
+        None,
     )
     .map_err(|e| format!("Failed to create propagation announce: {e}"))?;
-
-    let payload = announce.pack();
-
-    let flags = rns_wire::flags::PacketFlags {
-        header_type: rns_wire::flags::HeaderType::Header1,
-        context_flag: false,
-        transport_type: rns_wire::flags::TransportType::Broadcast,
-        destination_type: rns_wire::flags::DestinationType::Single,
-        packet_type: rns_wire::flags::PacketType::Announce,
-    };
-    let header = rns_wire::header::PacketHeader {
-        flags,
-        hops: 0,
-        transport_id: None,
-        destination_hash: propagation_dest_hash,
-        context: rns_wire::context::PacketContext::None,
-    };
-
-    let mut raw = header.pack();
-    raw.extend_from_slice(&payload);
+    if hash != propagation_dest_hash {
+        return Err("propagation destination hash does not match identity".to_string());
+    }
     Ok(raw)
 }
 
