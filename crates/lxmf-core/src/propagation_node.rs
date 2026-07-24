@@ -1962,7 +1962,13 @@ mod tests {
             ..Default::default()
         };
         let mut node = PropagationNode::new(config, [0xCC; 16]);
-        let key = peering_key(&remote_identity, &local_identity, cost);
+        let expected_material = [local_identity.as_slice(), remote_identity.as_slice()].concat();
+        let key = loop {
+            let candidate = peering_key(&remote_identity, &local_identity, cost);
+            if !crate::stamper::validate_peering_key(&expected_material, &candidate, cost) {
+                break candidate;
+            }
+        };
 
         use rmpv::Value;
         let offer = Value::Array(vec![
