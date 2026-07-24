@@ -31,6 +31,9 @@
 - [x] Удалить переходные legacy-тесты Link creation/transport capacity,
   establishment timeout и Direct Link reuse; reuse покрыт тестом
   `LinkSessionHandle` в rsReticulum.
+- [x] Удалить legacy wire-тесты исходящих Direct packet proof, backchannel и
+  LinkClose; эквивалентная доставка и proof backchannel покрыты тестом
+  `LinkSessionHandle` в rsReticulum.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
