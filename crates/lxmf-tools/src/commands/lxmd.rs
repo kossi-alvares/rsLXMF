@@ -957,10 +957,19 @@ impl LxmdRunner {
 
         if runner.config.propagation_enabled {
             if let Some(ref pn) = propagation_node {
-                let sync = lxmf_core::propagation_sync::PropagationSyncTask::with_shared_node(
+                let mut sync = lxmf_core::propagation_sync::PropagationSyncTask::with_shared_node(
                     transport_tx.clone(),
                     pn.clone(),
                 );
+                if let (Some(runtime), Some(signing_key)) =
+                    (runner.runtime.clone(), runner.identity.get_signing_key())
+                {
+                    sync.set_runtime_and_identity(
+                        runtime,
+                        runner.identity.get_public_key(),
+                        signing_key,
+                    );
+                }
                 runner.propagation_sync = Some(sync);
             }
             runner.propagation_node = propagation_node;

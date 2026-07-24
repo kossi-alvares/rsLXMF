@@ -14,9 +14,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use rns_crypto::ed25519::Ed25519PrivateKey;
 use rns_crypto::ed25519::Ed25519PublicKey;
 use rns_link::link::{CloseReason, Link};
 use rns_protocol::resource::{OutboundTransfer, TransferAction};
+use rns_runtime::link_client::LinkSession;
+use rns_runtime::reticulum::ReticulumHandle;
 use rns_transport::link_messages::DestinationEvent;
 use rns_transport::messages::{OutboundRequest, TransportMessage};
 use tokio::sync::mpsc;
@@ -55,11 +58,19 @@ pub struct PropagationSyncTask {
     transfer_queue: Vec<Vec<u8>>,
     active_transfer: Option<OutboundTransfer>,
     peer: Option<LxmPeer>,
+    runtime: Option<ReticulumHandle>,
+    identity_pub: Option<[u8; 64]>,
+    identity_key: Option<Ed25519PrivateKey>,
+    known_identities: HashMap<String, [u8; 64]>,
+    workflow_tx: mpsc::UnboundedSender<bool>,
+    workflow_rx: mpsc::UnboundedReceiver<bool>,
+    workflow_active: bool,
 }
 
 impl PropagationSyncTask {
     pub fn new(transport_tx: mpsc::Sender<TransportMessage>, dest_hash: [u8; 16]) -> Self {
         let (event_tx, event_rx) = mpsc::channel(256);
+        let (workflow_tx, workflow_rx) = mpsc::unbounded_channel();
         Self {
             transport_tx,
             event_tx,
@@ -79,6 +90,13 @@ impl PropagationSyncTask {
             transfer_queue: Vec::new(),
             active_transfer: None,
             peer: None,
+            runtime: None,
+            identity_pub: None,
+            identity_key: None,
+            known_identities: HashMap::new(),
+            workflow_tx,
+            workflow_rx,
+            workflow_active: false,
         }
     }
 
@@ -89,6 +107,7 @@ impl PropagationSyncTask {
         storage_path: std::path::PathBuf,
     ) -> std::io::Result<Self> {
         let (event_tx, event_rx) = mpsc::channel(256);
+        let (workflow_tx, workflow_rx) = mpsc::unbounded_channel();
         Ok(Self {
             transport_tx,
             event_tx,
@@ -109,6 +128,13 @@ impl PropagationSyncTask {
             transfer_queue: Vec::new(),
             active_transfer: None,
             peer: None,
+            runtime: None,
+            identity_pub: None,
+            identity_key: None,
+            known_identities: HashMap::new(),
+            workflow_tx,
+            workflow_rx,
+            workflow_active: false,
         })
     }
 
@@ -119,6 +145,7 @@ impl PropagationSyncTask {
         propagation_node: Arc<Mutex<PropagationNode>>,
     ) -> Self {
         let (event_tx, event_rx) = mpsc::channel(256);
+        let (workflow_tx, workflow_rx) = mpsc::unbounded_channel();
         Self {
             transport_tx,
             event_tx,
@@ -135,7 +162,25 @@ impl PropagationSyncTask {
             transfer_queue: Vec::new(),
             active_transfer: None,
             peer: None,
+            runtime: None,
+            identity_pub: None,
+            identity_key: None,
+            known_identities: HashMap::new(),
+            workflow_tx,
+            workflow_rx,
+            workflow_active: false,
         }
+    }
+
+    pub fn set_runtime_and_identity(
+        &mut self,
+        runtime: ReticulumHandle,
+        identity_pub: [u8; 64],
+        identity_key: Ed25519PrivateKey,
+    ) {
+        self.runtime = Some(runtime);
+        self.identity_pub = Some(identity_pub);
+        self.identity_key = Some(identity_key);
     }
 
     pub fn set_node(&mut self, dest_hash: [u8; 16]) {
@@ -170,6 +215,7 @@ impl PropagationSyncTask {
     ///
     /// `known_identities` maps dest_hash_hex -> 64-byte public key, used for link proof validation.
     pub fn drain_events(&mut self, known_identities: &HashMap<String, [u8; 64]>) {
+        self.known_identities.clone_from(known_identities);
         let mut events = Vec::new();
         while let Ok(event) = self.event_rx.try_recv() {
             events.push(event);
@@ -393,6 +439,18 @@ impl PropagationSyncTask {
     }
 
     pub fn tick(&mut self) {
+        if let Ok(success) = self.workflow_rx.try_recv() {
+            self.workflow_active = false;
+            self.state = if success {
+                SyncTaskState::Complete
+            } else {
+                SyncTaskState::Failed
+            };
+        }
+        if self.workflow_active {
+            return;
+        }
+
         if let Some(started) = self.sync_started
             && started.elapsed() > self.sync_timeout
             && self.state != SyncTaskState::Idle
@@ -508,6 +566,10 @@ impl PropagationSyncTask {
     }
 
     fn start_sync(&mut self, node_hash: [u8; 16]) {
+        if self.start_link_session_sync(node_hash) {
+            return;
+        }
+
         let (link, request_data) = Link::new_initiator(node_hash, 1);
         let link_id = link.link_id;
 
@@ -555,6 +617,70 @@ impl PropagationSyncTask {
         self.peer = Some(peer);
         self.state = SyncTaskState::Establishing;
         self.sync_started = Some(Instant::now());
+    }
+
+    fn start_link_session_sync(&mut self, node_hash: [u8; 16]) -> bool {
+        let Some(runtime) = self.runtime.clone() else {
+            return false;
+        };
+        let Some(remote_public_key) = self.known_identities.get(&hex_encode(&node_hash)).copied()
+        else {
+            return false;
+        };
+        let (Some(identity_pub), Some(identity_key)) = (
+            self.identity_pub,
+            self.identity_key
+                .as_ref()
+                .map(|key| Ed25519PrivateKey::from_bytes(&key.to_bytes())),
+        ) else {
+            return false;
+        };
+
+        let (offer_data, offered_messages) = {
+            let Ok(mut node) = self.propagation_node.lock() else {
+                return false;
+            };
+            let offer = node.prepare_sync_offer(node_hash);
+            let ids: Vec<rmpv::Value> = offer
+                .transient_ids
+                .iter()
+                .cloned()
+                .map(rmpv::Value::Binary)
+                .collect();
+            let data = crate::encode_value(&rmpv::Value::Array(vec![
+                rmpv::Value::Binary(offer.peering_key.clone()),
+                rmpv::Value::Array(ids),
+            ]));
+            let wanted_ids: Vec<PropagationTransientId> = offer
+                .transient_ids
+                .iter()
+                .filter_map(|id| id.as_slice().try_into().ok())
+                .collect();
+            let plan = node.plan_message_reads(&wanted_ids);
+            (data, crate::propagation_node::read_planned_messages(&plan))
+        };
+
+        let result_tx = self.workflow_tx.clone();
+        self.workflow_active = true;
+        self.state = SyncTaskState::Establishing;
+        self.sync_started = Some(Instant::now());
+        let mut peer = LxmPeer::new(node_hash);
+        peer.begin_sync();
+        self.peer = Some(peer);
+        tokio::spawn(async move {
+            let success = propagation_sync_workflow(
+                runtime,
+                node_hash,
+                remote_public_key,
+                identity_pub,
+                identity_key,
+                offer_data,
+                offered_messages,
+            )
+            .await;
+            let _ = result_tx.send(success);
+        });
+        true
     }
 
     fn drive_transfers(&mut self) {
@@ -700,6 +826,68 @@ impl PropagationSyncTask {
 
     pub fn peer(&self) -> Option<&LxmPeer> {
         self.peer.as_ref()
+    }
+}
+
+async fn propagation_sync_workflow(
+    runtime: ReticulumHandle,
+    node_hash: [u8; 16],
+    remote_public_key: [u8; 64],
+    identity_pub: [u8; 64],
+    identity_key: Ed25519PrivateKey,
+    offer_data: Vec<u8>,
+    offered_messages: Vec<(PropagationTransientId, Vec<u8>)>,
+) -> bool {
+    let workflow = async {
+        let mut link = LinkSession::open_with_public_key(
+            &runtime,
+            rns_identity::identity::Identity::new(),
+            node_hash,
+            remote_public_key,
+            1,
+            Duration::from_secs(30),
+        )
+        .await?;
+        link.identify_with(&identity_pub, &identity_key).await?;
+        let response = link
+            .request(
+                OFFER_REQUEST_PATH,
+                Some(&offer_data),
+                Duration::from_secs(60),
+            )
+            .await?;
+        let wanted = match OfferResponse::from_msgpack(&response) {
+            OfferResponse::WantAll => offered_messages
+                .iter()
+                .map(|(id, _)| *id)
+                .collect::<Vec<_>>(),
+            OfferResponse::HaveAll => Vec::new(),
+            OfferResponse::WantSome(ids) => ids
+                .into_iter()
+                .filter_map(|id| id.as_slice().try_into().ok())
+                .collect(),
+            _ => return Err("peer rejected propagation offer".into()),
+        };
+        for (_, message) in offered_messages
+            .into_iter()
+            .filter(|(id, _)| wanted.contains(id))
+        {
+            link.send_resource(message, true, Duration::from_secs(120))
+                .await?;
+        }
+        link.close().await?;
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    }
+    .await;
+    if let Err(error) = workflow {
+        tracing::warn!(
+            error = %error,
+            peer = %hex::encode(node_hash),
+            "propagation sync over LinkSession failed"
+        );
+        false
+    } else {
+        true
     }
 }
 
