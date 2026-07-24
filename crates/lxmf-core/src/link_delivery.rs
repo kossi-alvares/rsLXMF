@@ -14,6 +14,9 @@ use rns_identity::identity::Identity;
 use rns_link::constants::{ESTABLISHMENT_TIMEOUT_PER_HOP, KEEPALIVE_DEFAULT};
 use rns_link::link::LinkState;
 use rns_runtime::link_client::{LinkPayloadSendReceipt, LinkSession, LinkSessionHandle};
+pub use rns_runtime::link_manager::{
+    LinkPayloadSendReceipt as BackchannelSendReceipt, LinkSendError as BackchannelSendError,
+};
 use rns_runtime::reticulum::ReticulumHandle;
 use rns_transport::messages::TransportMessage;
 use tokio::sync::mpsc::error::TrySendError;
@@ -289,44 +292,6 @@ pub struct DirectLinkStartReport {
     pub queued_deliveries: usize,
     pub in_flight_deliveries: usize,
 }
-
-/// A proof-tracked send over an already-authenticated inbound delivery Link.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BackchannelSendReceipt {
-    Packet {
-        link_id: [u8; 16],
-        packet_hash: [u8; 32],
-    },
-    Resource {
-        link_id: [u8; 16],
-        resource_hash: [u8; 32],
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BackchannelSendError {
-    LinkNotFound,
-    LinkNotActive,
-    NoSessionKeys,
-    TransportUnavailable,
-    ResourceStartFailed,
-    Other(String),
-}
-
-impl fmt::Display for BackchannelSendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LinkNotFound => f.write_str("link not found"),
-            Self::LinkNotActive => f.write_str("link is not active"),
-            Self::NoSessionKeys => f.write_str("link session keys are unavailable"),
-            Self::TransportUnavailable => f.write_str("transport channel is full or closed"),
-            Self::ResourceStartFailed => f.write_str("resource transfer could not be started"),
-            Self::Other(reason) => f.write_str(reason),
-        }
-    }
-}
-
-impl std::error::Error for BackchannelSendError {}
 
 /// Whether a link-delivery failure should be treated like upstream LXMF's
 /// closed/pending Link path, where the message remains eligible for Direct
@@ -1217,20 +1182,14 @@ impl LinkDeliveryManager {
             match start.receiver.try_recv() {
                 Ok(Ok(receipt)) => {
                     let (key, representation, progress, kind) = match receipt {
-                        BackchannelSendReceipt::Packet {
-                            link_id,
-                            packet_hash,
-                        } => (
-                            BackchannelProofKey::Packet(link_id, packet_hash),
+                        BackchannelSendReceipt::Packet(receipt) => (
+                            BackchannelProofKey::Packet(receipt.link_id, receipt.packet_hash),
                             DeliveryRepresentation::Packet,
                             0.50,
                             LxmfDeliveryEventKind::AwaitingProof,
                         ),
-                        BackchannelSendReceipt::Resource {
-                            link_id,
-                            resource_hash,
-                        } => (
-                            BackchannelProofKey::Resource(link_id, resource_hash),
+                        BackchannelSendReceipt::Resource(receipt) => (
+                            BackchannelProofKey::Resource(receipt.link_id, receipt.resource_hash),
                             DeliveryRepresentation::Resource,
                             0.10,
                             LxmfDeliveryEventKind::TransferStarted,
@@ -1988,10 +1947,12 @@ mod tests {
         assert!(
             command
                 .result_tx
-                .send(Ok(BackchannelSendReceipt::Packet {
-                    link_id,
-                    packet_hash,
-                }))
+                .send(Ok(BackchannelSendReceipt::Packet(
+                    rns_runtime::link_manager::LinkPacketSendReceipt {
+                        link_id,
+                        packet_hash,
+                    },
+                )))
                 .is_ok()
         );
 
@@ -2126,10 +2087,12 @@ mod tests {
         assert!(
             command
                 .result_tx
-                .send(Ok(BackchannelSendReceipt::Packet {
-                    link_id,
-                    packet_hash,
-                }))
+                .send(Ok(BackchannelSendReceipt::Packet(
+                    rns_runtime::link_manager::LinkPacketSendReceipt {
+                        link_id,
+                        packet_hash,
+                    },
+                )))
                 .is_ok()
         );
         assert!(mgr.tick().is_empty());

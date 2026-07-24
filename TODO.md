@@ -48,6 +48,12 @@
   модели `LinkDeliveryManager`; исходящие сессии теперь только runtime-owned.
 - [x] Физически удалить из `link_delivery.rs` отключённые legacy inbound
   handlers, ручную ветку `tick()` и Link/Resource wire helpers.
+- [x] Завершить разделение `LinkDeliveryManager`: в rsLXMF остались очереди,
+  retry, LXMF-состояния и backchannel-маршрутизация; Link lifecycle и transfer
+  принадлежат публичным API rsReticulum.
+- [x] Сохранить входящие backchannel-ссылки через `LinkManager` без ручной
+  обработки Resource ADV/parts/HMU/proofs в rsLXMF; использовать нативные
+  receipt/error типы `LinkManager` без адаптера в `lxmd`.
 - [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
   DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
@@ -55,13 +61,6 @@
 
 ## Следующие шаги
 
-- [ ] Разделить ответственность `LinkDeliveryManager`:
-  - оставить в rsLXMF очереди сообщений, retry-политику, LXMF-состояния и
-    backchannel-маршрутизацию;
-  - перенести установку Link, identification, отправку packet/resource и
-    обработку proofs на публичные API rsReticulum.
-- [ ] Сохранить поддержку входящих backchannel-ссылок через `LinkManager`,
-  убрав из rsLXMF ручную обработку Resource advertisement, parts, HMU и proofs.
 - [ ] Удалить оставшиеся неиспользуемые структуры и зависимости низкого уровня
   (`rns-link`, Resource transfer primitives и ручные wire headers), если после
   миграции они больше не нужны rsLXMF.

@@ -17,7 +17,7 @@ use lxmf_core::constants::{
 };
 use lxmf_core::delivery_ratchet::{DELIVERY_APP_NAME, DeliveryAnnounceKind, DeliveryRatchetState};
 use lxmf_core::link_delivery::{
-    BackchannelSendCommand, BackchannelSendError, BackchannelSendReceipt, DeliveryResult,
+    BackchannelSendCommand, BackchannelSendError, DeliveryResult,
     is_retryable_link_delivery_failure,
 };
 use lxmf_core::message::LxMessage;
@@ -233,47 +233,6 @@ fn direct_reusable_link_state(
         }
     } else {
         DirectReusableLinkState::None
-    }
-}
-
-fn backchannel_receipt_from_runtime(
-    receipt: rns_runtime::link_manager::LinkPayloadSendReceipt,
-) -> BackchannelSendReceipt {
-    match receipt {
-        rns_runtime::link_manager::LinkPayloadSendReceipt::Packet(receipt) => {
-            BackchannelSendReceipt::Packet {
-                link_id: receipt.link_id,
-                packet_hash: receipt.packet_hash,
-            }
-        }
-        rns_runtime::link_manager::LinkPayloadSendReceipt::Resource(receipt) => {
-            BackchannelSendReceipt::Resource {
-                link_id: receipt.link_id,
-                resource_hash: receipt.resource_hash,
-            }
-        }
-    }
-}
-
-fn backchannel_error_from_runtime(
-    err: rns_runtime::link_manager::LinkSendError,
-) -> BackchannelSendError {
-    match err {
-        rns_runtime::link_manager::LinkSendError::LinkNotFound => {
-            BackchannelSendError::LinkNotFound
-        }
-        rns_runtime::link_manager::LinkSendError::LinkNotActive => {
-            BackchannelSendError::LinkNotActive
-        }
-        rns_runtime::link_manager::LinkSendError::NoSessionKeys => {
-            BackchannelSendError::NoSessionKeys
-        }
-        rns_runtime::link_manager::LinkSendError::TransportUnavailable => {
-            BackchannelSendError::TransportUnavailable
-        }
-        rns_runtime::link_manager::LinkSendError::ResourceStartFailed => {
-            BackchannelSendError::ResourceStartFailed
-        }
     }
 }
 
@@ -1257,8 +1216,7 @@ impl LxmdRunner {
                 Ok(()) => {
                     tokio::spawn(async move {
                         let result = match result_rx.await {
-                            Ok(Ok(receipt)) => Ok(backchannel_receipt_from_runtime(receipt)),
-                            Ok(Err(err)) => Err(backchannel_error_from_runtime(err)),
+                            Ok(result) => result,
                             Err(_) => Err(BackchannelSendError::TransportUnavailable),
                         };
                         let _ = command.result_tx.send(result);
