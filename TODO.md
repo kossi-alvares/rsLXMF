@@ -67,11 +67,11 @@
   (`rns-link`, Resource transfer primitives и ручные wire headers), если после
   миграции они больше не нужны rsLXMF.
 - [ ] Добавить интеграционные сетевые тесты для:
-  - direct delivery короткого сообщения;
-  - direct delivery через Resource;
-  - повторного использования Direct Link;
-  - backchannel delivery;
-  - propagation download и peer sync через shared instance.
+  - [x] direct delivery короткого сообщения между двумя `LinkManager`;
+  - [ ] direct delivery через Resource;
+  - [ ] повторного использования Direct Link;
+  - [ ] backchannel delivery;
+  - [ ] propagation download и peer sync через shared instance.
 - [ ] Сопоставить оставшийся публичный API rsLXMF с Python LXMF и зафиксировать
   известные несовпадения.
 - [ ] Выполнить финальный прогон `cargo check --workspace --all-targets` и
