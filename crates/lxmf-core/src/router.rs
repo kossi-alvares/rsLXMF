@@ -886,6 +886,20 @@ impl LxmRouter {
         self.delivery_callback = Some(Box::new(callback));
     }
 
+    /// Deliver an already decoded inbound message to the application callback.
+    ///
+    /// Reticulum adapters perform transport decryption, source-key lookup,
+    /// signature/stamp validation and deduplication before calling this method.
+    /// Keeping the final callback dispatch public lets embedding applications
+    /// use the same router surface as `lxmd-rs`.
+    pub fn deliver_inbound(&self, message: &LxMessage) -> bool {
+        let Some(callback) = self.delivery_callback.as_ref() else {
+            return false;
+        };
+        callback(message);
+        true
+    }
+
     /// Load persisted runtime state (stamp costs, tickets, dedup sets) from
     /// `state_dir`. Missing files are treated as empty state. Dedup-cache
     /// timestamps are restored as persisted so age-based expiry survives

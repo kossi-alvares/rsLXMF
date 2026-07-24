@@ -667,6 +667,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lxmf-examples"
+version = "1.0.1"
+dependencies = [
+ "hex",
+ "lxmf-core",
+ "rns-identity",
+]
+
+[[package]]
 name = "lxmf-tools"
 version = "1.0.1"
 dependencies = [

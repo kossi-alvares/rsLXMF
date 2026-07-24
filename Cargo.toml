@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/lxmf-core",
     "crates/lxmf-tools",
+    "examples",
 ]
 
 [workspace.package]

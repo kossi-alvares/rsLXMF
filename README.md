@@ -26,6 +26,7 @@ LXMF daemons on `PATH` without worry.
 ## Contents
 
 - [Build It](#build-it)
+- [Rust Examples](#rust-examples)
 - [Operating lxmd-rs](#operating-lxmd-rs)
 - [Configuration](#configuration)
 - [Delivery Model](#delivery-model)
@@ -112,6 +113,21 @@ cargo build --release
 
 After the build, use the commands below with `./target/release/lxmd-rs` on
 macOS/Linux or `.\target\release\lxmd-rs.exe` on Windows.
+
+## Rust Examples
+
+The [`examples`](examples/README.md) workspace crate ports the reference
+`docs/example_sender.py` and `docs/example_receiver.py` programs:
+
+```bash
+cargo run -p lxmf-examples --bin example_sender -- <recipient_hash>
+cargo run -p lxmf-examples --bin example_receiver -- <packed_lxmf_hex>
+cargo test -p lxmf-examples
+```
+
+Both arguments are optional for local API demonstrations. The examples use
+the public `DeliveryIdentity` helper, signed LXMF messages and the router's
+inbound delivery callback.
 
 ## Operating lxmd-rs
 

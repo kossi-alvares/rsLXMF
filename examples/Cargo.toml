@@ -1,0 +1,12 @@
+[package]
+name = "lxmf-examples"
+description = "Rust counterparts to LXMF/docs example_sender.py and example_receiver.py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+lxmf-core = { workspace = true }
+rns-identity = { workspace = true }
+hex = { workspace = true }

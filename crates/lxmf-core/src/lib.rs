@@ -41,6 +41,7 @@ pub(crate) fn now_f64() -> f64 {
         .as_secs_f64()
 }
 
+pub mod application;
 pub mod constants;
 pub mod delivery_ratchet;
 pub mod discovery_stamper;
