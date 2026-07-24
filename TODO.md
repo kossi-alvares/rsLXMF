@@ -71,7 +71,7 @@
   - [x] direct delivery через Resource между двумя `LinkManager`;
   - [x] повторного использования Direct Link;
   - [x] backchannel delivery с proof после LINKIDENTIFY;
-  - [ ] propagation download и peer sync через shared instance.
+  - [x] propagation download и peer sync через shared instance.
 - [ ] Сопоставить оставшийся публичный API rsLXMF с Python LXMF и зафиксировать
   известные несовпадения.
 - [ ] Выполнить финальный прогон `cargo check --workspace --all-targets` и

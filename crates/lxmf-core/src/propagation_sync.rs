@@ -202,7 +202,29 @@ impl PropagationSyncTask {
             return false;
         };
 
-        let Some((offer_data, offered_messages)) = self.prepare_offer(node_hash) else {
+        let Ok(remote_identity) =
+            rns_identity::identity::Identity::from_public_key(&remote_public_key)
+        else {
+            self.state = SyncTaskState::Failed;
+            return false;
+        };
+        let Ok(local_identity) = rns_identity::identity::Identity::from_public_key(&identity_pub)
+        else {
+            self.state = SyncTaskState::Failed;
+            return false;
+        };
+        let mut peer = LxmPeer::new(node_hash);
+        if !peer.generate_peering_key(&remote_identity.hash, &local_identity.hash) {
+            self.state = SyncTaskState::Failed;
+            return false;
+        }
+        let peering_key = peer
+            .peering_key
+            .as_ref()
+            .map(|(key, _)| key.to_vec())
+            .unwrap_or_default();
+        let Some((offer_data, offered_messages)) = self.prepare_offer(node_hash, peering_key)
+        else {
             self.state = SyncTaskState::Failed;
             return false;
         };
@@ -210,7 +232,6 @@ impl PropagationSyncTask {
         self.workflow_active = true;
         self.state = SyncTaskState::Establishing;
         self.sync_started = Some(Instant::now());
-        let mut peer = LxmPeer::new(node_hash);
         peer.begin_sync();
         self.peer = Some(peer);
         tokio::spawn(async move {
@@ -232,9 +253,11 @@ impl PropagationSyncTask {
     fn prepare_offer(
         &self,
         node_hash: [u8; 16],
+        peering_key: Vec<u8>,
     ) -> Option<(Vec<u8>, Vec<(PropagationTransientId, Vec<u8>)>)> {
         let mut node = self.propagation_node.lock().ok()?;
-        let offer = node.prepare_sync_offer(node_hash);
+        let mut offer = node.prepare_sync_offer(node_hash);
+        offer.peering_key = peering_key;
         let ids = offer
             .transient_ids
             .iter()
@@ -267,7 +290,7 @@ impl PropagationSyncTask {
     }
 }
 
-async fn propagation_sync_workflow(
+pub(crate) async fn propagation_sync_workflow(
     runtime: ReticulumHandle,
     node_hash: [u8; 16],
     remote_public_key: [u8; 64],

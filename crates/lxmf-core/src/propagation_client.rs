@@ -322,6 +322,23 @@ fn decode_binary_array(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    use rns_identity::destination::Destination;
+    use rns_identity::identity::Identity;
+    use rns_runtime::lifecycle::ShutdownSignal;
+    use rns_runtime::link_manager::LinkManager;
+    use rns_runtime::reticulum::{InstanceMode, init};
+
+    async fn free_tcp_port_pair() -> (u16, u16) {
+        let first = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        (
+            first.local_addr().unwrap().port(),
+            second.local_addr().unwrap().port(),
+        )
+    }
 
     #[test]
     fn binary_array_filters_invalid_ids() {
@@ -352,5 +369,176 @@ mod tests {
         client.received_messages = vec![vec![1], vec![2]];
         assert_eq!(client.take_received_messages(), vec![vec![1], vec![2]]);
         assert_eq!(client.received_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn propagation_download_and_peer_sync_cross_shared_instance() {
+        let (port, control_port) = free_tcp_port_pair().await;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("lxmf_shared_propagation_{nonce}"));
+        let shared_dir = base.join("shared");
+        let server_dir = base.join("server");
+        let client_dir = base.join("client");
+        for dir in [&shared_dir, &server_dir, &client_dir] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(
+                dir.join("config"),
+                format!(
+                    "[reticulum]\nshare_instance = Yes\nshared_instance_type = tcp\n\
+                     shared_instance_port = {port}\ninstance_control_port = {control_port}\n\
+                     rpc_key = 4242424242424242424242424242424242424242424242424242424242424242\n\
+                     enable_transport = No\n\n[interfaces]\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        let shared_shutdown = ShutdownSignal::new();
+        let server_shutdown = ShutdownSignal::new();
+        let client_shutdown = ShutdownSignal::new();
+        let shared = init(
+            Some(shared_dir.to_str().unwrap()),
+            None,
+            shared_shutdown.clone(),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await
+        .unwrap();
+        let server = init(
+            Some(server_dir.to_str().unwrap()),
+            None,
+            server_shutdown.clone(),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await
+        .unwrap();
+        let client = init(
+            Some(client_dir.to_str().unwrap()),
+            None,
+            client_shutdown.clone(),
+            Arc::new(AtomicBool::new(true)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(shared.instance_mode, InstanceMode::Shared);
+        assert_eq!(server.instance_mode, InstanceMode::Client);
+        assert_eq!(client.instance_mode, InstanceMode::Client);
+
+        let server_identity = Identity::new();
+        let server_public_key = server_identity.get_public_key();
+        let server_hash = Destination::hash_from_name_and_identity(
+            "lxmf.propagation",
+            Some(&server_identity.hash),
+        );
+        let (delivery_tx, delivery_rx) = mpsc::channel(64);
+        server
+            .transport_tx
+            .send(TransportMessage::RegisterDestination {
+                hash: server_hash,
+                app_name: "lxmf.propagation".into(),
+                delivery_tx: Some(delivery_tx),
+            })
+            .await
+            .unwrap();
+
+        let node = Arc::new(Mutex::new(crate::propagation_node::PropagationNode::new(
+            crate::propagation_node::PropagationNodeConfig::default(),
+            server_hash,
+        )));
+        let mut manager = LinkManager::with_destination(
+            server.transport_tx.clone(),
+            delivery_rx,
+            &server_identity,
+            "lxmf.propagation",
+            server_identity.get_signing_key(),
+        );
+        let link_identities = manager.link_identities_handle();
+        let server_identity_hash = server_identity.hash;
+        let handler_node = node.clone();
+        let offer_path_hash =
+            rns_crypto::sha::truncated_hash(crate::constants::OFFER_REQUEST_PATH.as_bytes());
+        let get_path_hash =
+            rns_crypto::sha::truncated_hash(crate::constants::MESSAGE_GET_PATH.as_bytes());
+        manager.set_request_handler(move |link_id, path_hash, data| {
+            let remote_identity = link_identities
+                .lock()
+                .ok()
+                .and_then(|identities| identities.get(&link_id).copied());
+            let handler = crate::handlers::PropagationRequestHandler::new(server_identity_hash);
+            let mut node = handler_node.lock().ok()?;
+            if path_hash == offer_path_hash {
+                Some(handler.handle_offer_request(remote_identity.as_ref(), &data, &mut node))
+            } else if path_hash == get_path_hash {
+                Some(
+                    handler
+                        .handle_message_get_request(
+                            remote_identity.as_ref(),
+                            &[0; 16],
+                            &data,
+                            &mut node,
+                        )
+                        .into_response(),
+                )
+            } else {
+                None
+            }
+        });
+        let manager_task = tokio::spawn(manager.run());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let download_identity = Identity::new();
+        let download = propagation_download_workflow(
+            client.clone(),
+            server_hash,
+            Some(server_public_key),
+            download_identity.get_public_key(),
+            download_identity.get_signing_key().unwrap(),
+            HashSet::new(),
+            Some(DELIVERY_LIMIT as f64),
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(download.success);
+        assert!(download.available_messages.is_empty());
+
+        let sync_identity = Identity::new();
+        let mut sync_node = crate::propagation_node::PropagationNode::new(
+            crate::propagation_node::PropagationNodeConfig::default(),
+            sync_identity.hash,
+        );
+        let mut offer = sync_node.prepare_sync_offer(server_hash);
+        let mut peer = crate::peer::LxmPeer::new(server_hash);
+        assert!(peer.generate_peering_key(&server_identity.hash, &sync_identity.hash));
+        offer.peering_key = peer
+            .peering_key
+            .as_ref()
+            .map(|(key, _)| key.to_vec())
+            .unwrap();
+        let offer_data = crate::encode_value(&rmpv::Value::Array(vec![
+            rmpv::Value::Binary(offer.peering_key),
+            rmpv::Value::Array(Vec::new()),
+        ]));
+        assert!(
+            crate::propagation_sync::propagation_sync_workflow(
+                client,
+                server_hash,
+                server_public_key,
+                sync_identity.get_public_key(),
+                sync_identity.get_signing_key().unwrap(),
+                offer_data,
+                Vec::new(),
+            )
+            .await
+        );
+
+        manager_task.abort();
+        client_shutdown.trigger();
+        server_shutdown.trigger();
+        shared_shutdown.trigger();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
