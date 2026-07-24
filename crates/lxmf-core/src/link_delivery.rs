@@ -54,13 +54,9 @@ pub struct PendingDelivery {
     pub link: Link,
     pub state: DeliveryState,
     pub started_at: Instant,
-    /// Resource transfer, populated after the link establishes.
-    pub transfer: Option<OutboundTransfer>,
-    /// Remaining Reticulum resource segments for payloads larger than one
-    /// efficient resource. Segment 1 is stored in `transfer`.
-    pub remaining_segments: Vec<OutboundResource>,
-    /// Full packet hash of a single link-packet LXMF delivery awaiting LINKPROOF.
-    pub packet_proof_hash: Option<[u8; 32]>,
+    /// Reticulum-owned transfer and proof tracking. Keeping this separate from
+    /// LXMF message/queue state makes it replaceable by `LinkSession` results.
+    network_transfer: LinkTransferState,
     /// Link establishment timeout. This intentionally excludes keepalive time:
     /// an initiator that never receives LRPROOF should fail on the Link
     /// establishment clock, not on the active-link inactivity clock.
@@ -88,6 +84,17 @@ struct QueuedDelivery {
     auto_compress: bool,
     msg_hash: Option<[u8; 32]>,
     queued_at: Instant,
+}
+
+/// Low-level state used only by the legacy in-process Reticulum transfer
+/// driver. LXMF queueing and retry policy must not be added here.
+#[derive(Default)]
+struct LinkTransferState {
+    transfer: Option<OutboundTransfer>,
+    /// Remaining segments after the transfer currently in `transfer`.
+    remaining_segments: Vec<OutboundResource>,
+    /// Hash addressed by a single-packet LINKPROOF.
+    packet_proof_hash: Option<[u8; 32]>,
 }
 
 /// FIFO policy for messages sharing one reusable Direct Link.
@@ -174,9 +181,7 @@ impl PendingDelivery {
         self.message = next.message;
         self.packed_override = next.packed_override;
         self.auto_compress = next.auto_compress;
-        self.transfer = None;
-        self.remaining_segments.clear();
-        self.packet_proof_hash = None;
+        self.network_transfer = LinkTransferState::default();
         self.started_at = Instant::now();
         self.msg_hash = next.msg_hash;
         self.failure_reason = None;
@@ -995,9 +1000,7 @@ impl LinkDeliveryManager {
                 link,
                 state: DeliveryState::Establishing,
                 started_at: Instant::now(),
-                transfer: None,
-                remaining_segments: Vec::new(),
-                packet_proof_hash: None,
+                network_transfer: LinkTransferState::default(),
                 establishment_timeout: Duration::from_secs_f64(establishment_timeout_secs),
                 timeout: Duration::from_secs_f64(timeout_secs),
                 msg_hash,
@@ -1437,7 +1440,8 @@ impl LinkDeliveryManager {
                                     &packed,
                                 ) {
                                     Some(packet_hash) => {
-                                        delivery.packet_proof_hash = Some(packet_hash);
+                                        delivery.network_transfer.packet_proof_hash =
+                                            Some(packet_hash);
                                         delivery.state = DeliveryState::AwaitingProof;
                                         delivery.message.progress = 0.50;
                                         self.delivery_events.push_back(delivery_event(
@@ -1474,8 +1478,9 @@ impl LinkDeliveryManager {
                                 );
                                 match transfer_result {
                                     Ok((transfer, remaining_segments)) => {
-                                        delivery.transfer = Some(transfer);
-                                        delivery.remaining_segments = remaining_segments;
+                                        delivery.network_transfer.transfer = Some(transfer);
+                                        delivery.network_transfer.remaining_segments =
+                                            remaining_segments;
                                         delivery.message.progress = 0.10;
                                         self.delivery_events.push_back(delivery_event(
                                             LxmfDeliveryEventKind::TransferStarted,
@@ -1504,7 +1509,7 @@ impl LinkDeliveryManager {
                             if delivery.state != DeliveryState::Transferring {
                                 break;
                             }
-                            let Some(ref mut transfer) = delivery.transfer else {
+                            let Some(ref mut transfer) = delivery.network_transfer.transfer else {
                                 break;
                             };
                             let action = transfer.tick();
@@ -1855,7 +1860,7 @@ impl LinkDeliveryManager {
 
     pub fn handle_hmu(&mut self, link_id: &[u8; 16], hmu_data: &[u8]) {
         let event = if let Some(delivery) = self.pending.get_mut(link_id)
-            && let Some(ref mut transfer) = delivery.transfer
+            && let Some(ref mut transfer) = delivery.network_transfer.transfer
         {
             transfer.handle_hmu(hmu_data);
             let progress = delivery_resource_progress(delivery);
@@ -1891,7 +1896,7 @@ impl LinkDeliveryManager {
             let Some(delivery) = self.pending.get_mut(link_id) else {
                 return;
             };
-            let Some(ref mut transfer) = delivery.transfer else {
+            let Some(ref mut transfer) = delivery.network_transfer.transfer else {
                 return;
             };
             let actions = transfer.handle_request(request_data);
@@ -1933,7 +1938,7 @@ impl LinkDeliveryManager {
     pub fn handle_resource_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         let mut event = None;
         let accepted = if let Some(delivery) = self.pending.get_mut(link_id)
-            && let Some(ref mut transfer) = delivery.transfer
+            && let Some(ref mut transfer) = delivery.network_transfer.transfer
             && transfer.handle_proof(proof_data)
         {
             let progress = delivery_resource_proof_progress(delivery).unwrap_or(1.0);
@@ -1945,12 +1950,13 @@ impl LinkDeliveryManager {
                 Some(progress),
                 None,
             ));
-            if delivery.remaining_segments.is_empty() {
+            if delivery.network_transfer.remaining_segments.is_empty() {
                 delivery.state = DeliveryState::Complete;
             } else {
                 let rtt = delivery.link.rtt.unwrap_or(Duration::from_millis(500));
-                let next_segment = delivery.remaining_segments.remove(0);
-                delivery.transfer = Some(OutboundTransfer::from_prebuilt(next_segment, rtt));
+                let next_segment = delivery.network_transfer.remaining_segments.remove(0);
+                delivery.network_transfer.transfer =
+                    Some(OutboundTransfer::from_prebuilt(next_segment, rtt));
                 delivery.state = DeliveryState::Transferring;
             }
             true
@@ -1973,11 +1979,11 @@ impl LinkDeliveryManager {
         rejected_hash.copy_from_slice(&reject_data[..32]);
 
         if let Some(delivery) = self.pending.get_mut(link_id)
-            && let Some(ref mut transfer) = delivery.transfer
+            && let Some(ref mut transfer) = delivery.network_transfer.transfer
             && transfer.resource.resource_hash == rejected_hash
         {
             transfer.handle_cancel();
-            delivery.remaining_segments.clear();
+            delivery.network_transfer.remaining_segments.clear();
             delivery.message.mark_rejected();
             delivery.state = DeliveryState::Rejected;
             delivery.failure_reason = Some("resource rejected".to_string());
@@ -2012,9 +2018,7 @@ impl LinkDeliveryManager {
                 delivery.failure_reason = Some("link closed".to_string());
                 return true;
             }
-            delivery.transfer = None;
-            delivery.remaining_segments.clear();
-            delivery.packet_proof_hash = None;
+            delivery.network_transfer = LinkTransferState::default();
             delivery.state = DeliveryState::Failed;
             delivery.failure_reason = Some("link closed".to_string());
         }
@@ -2026,7 +2030,7 @@ impl LinkDeliveryManager {
     pub fn handle_link_packet_proof(&mut self, link_id: &[u8; 16], proof_data: &[u8]) -> bool {
         if let Some(delivery) = self.pending.get_mut(link_id)
             && delivery.state == DeliveryState::AwaitingProof
-            && let Some(packet_hash) = delivery.packet_proof_hash
+            && let Some(packet_hash) = delivery.network_transfer.packet_proof_hash
             && delivery
                 .link
                 .validate_packet_proof(&packet_hash, proof_data)
@@ -2525,7 +2529,7 @@ fn fail_backchannel_start(
 }
 
 fn delivery_resource_progress(delivery: &PendingDelivery) -> Option<f64> {
-    let transfer = delivery.transfer.as_ref()?;
+    let transfer = delivery.network_transfer.transfer.as_ref()?;
     let total_segments = transfer.resource.total_segments.max(1);
     let completed_segments = transfer.resource.segment_index.saturating_sub(1);
     let aggregate = (completed_segments as f64 + transfer.progress()) / total_segments as f64;
@@ -2533,7 +2537,7 @@ fn delivery_resource_progress(delivery: &PendingDelivery) -> Option<f64> {
 }
 
 fn delivery_resource_proof_progress(delivery: &PendingDelivery) -> Option<f64> {
-    let transfer = delivery.transfer.as_ref()?;
+    let transfer = delivery.network_transfer.transfer.as_ref()?;
     let total_segments = transfer.resource.total_segments.max(1);
     let completed_segments = transfer.resource.segment_index.min(total_segments);
     let aggregate = completed_segments as f64 / total_segments as f64;
@@ -2579,9 +2583,7 @@ fn finish_reusable_delivery(
             send_link_identify(transport_tx, link_id, &delivery.link, pub_key, sign_key);
     }
 
-    delivery.transfer = None;
-    delivery.remaining_segments.clear();
-    delivery.packet_proof_hash = None;
+    delivery.network_transfer = LinkTransferState::default();
     delivery.failure_reason = None;
 
     if delivery.link.is_active() && delivery.start_queued_delivery() {
@@ -2592,9 +2594,7 @@ fn finish_reusable_delivery(
 }
 
 fn finish_unsuccessful_reusable_delivery(delivery: &mut PendingDelivery) {
-    delivery.transfer = None;
-    delivery.remaining_segments.clear();
-    delivery.packet_proof_hash = None;
+    delivery.network_transfer = LinkTransferState::default();
     delivery.failure_reason = None;
 
     if delivery.link.is_active() && delivery.start_queued_delivery() {
@@ -2610,6 +2610,7 @@ fn cancel_current_delivery(
     delivery: &mut PendingDelivery,
 ) {
     if let Some(resource_hash) = delivery
+        .network_transfer
         .transfer
         .as_ref()
         .map(|transfer| transfer.resource.resource_hash)
@@ -2630,9 +2631,7 @@ fn push_failed_delivery_and_queue(
     delivery: &mut PendingDelivery,
     reason: &str,
 ) {
-    delivery.transfer = None;
-    delivery.remaining_segments.clear();
-    delivery.packet_proof_hash = None;
+    delivery.network_transfer = LinkTransferState::default();
     events.push_back(delivery_event(
         LxmfDeliveryEventKind::Failed,
         link_id,
@@ -4058,12 +4057,16 @@ mod tests {
         }));
 
         let delivery = mgr.pending.get(&link_id).unwrap();
-        let transfer = delivery.transfer.as_ref().expect("first segment transfer");
+        let transfer = delivery
+            .network_transfer
+            .transfer
+            .as_ref()
+            .expect("first segment transfer");
         assert!(transfer.resource.flags.split);
         assert_eq!(transfer.resource.segment_index, 1);
         assert!(transfer.resource.total_segments >= 2);
         assert_eq!(
-            delivery.remaining_segments.len(),
+            delivery.network_transfer.remaining_segments.len(),
             transfer.resource.total_segments - 1
         );
     }
@@ -4182,7 +4185,7 @@ mod tests {
 
         let first_proof = {
             let delivery = mgr.pending.get(&link_id).unwrap();
-            let transfer = delivery.transfer.as_ref().unwrap();
+            let transfer = delivery.network_transfer.transfer.as_ref().unwrap();
             assert!(transfer.resource.total_segments >= 2);
             let mut proof = Vec::new();
             proof.extend_from_slice(&transfer.resource.resource_hash);
@@ -4201,19 +4204,25 @@ mod tests {
         let delivery = mgr.pending.get(&link_id).unwrap();
         assert_eq!(delivery.state, DeliveryState::Transferring);
         assert_eq!(
-            delivery.transfer.as_ref().unwrap().resource.segment_index,
+            delivery
+                .network_transfer
+                .transfer
+                .as_ref()
+                .unwrap()
+                .resource
+                .segment_index,
             2
         );
 
         let mut terminal_proofs = Vec::new();
         loop {
             let delivery = mgr.pending.get(&link_id).unwrap();
-            let transfer = delivery.transfer.as_ref().unwrap();
+            let transfer = delivery.network_transfer.transfer.as_ref().unwrap();
             let mut proof = Vec::new();
             proof.extend_from_slice(&transfer.resource.resource_hash);
             proof.extend_from_slice(&transfer.resource.expected_proof);
             terminal_proofs.push(proof);
-            if delivery.remaining_segments.is_empty() {
+            if delivery.network_transfer.remaining_segments.is_empty() {
                 break;
             }
             let proof = terminal_proofs.pop().unwrap();
@@ -4258,6 +4267,7 @@ mod tests {
             .pending
             .get(&link_id)
             .unwrap()
+            .network_transfer
             .transfer
             .as_ref()
             .unwrap()
@@ -4426,7 +4436,10 @@ mod tests {
         let packet_hash = rns_wire::hash::packet_hash(&packet_raw, packet_header.flags.header_type);
         let delivery = mgr.pending.get(&link_id).unwrap();
         assert_eq!(delivery.state, DeliveryState::AwaitingProof);
-        assert_eq!(delivery.packet_proof_hash, Some(packet_hash));
+        assert_eq!(
+            delivery.network_transfer.packet_proof_hash,
+            Some(packet_hash)
+        );
 
         let proof_data = responder_link
             .prove_packet(&packet_hash, &responder_key)
