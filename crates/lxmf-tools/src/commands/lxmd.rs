@@ -2389,89 +2389,74 @@ impl LxmdRunner {
                 }
             };
 
-            let flags = rns_wire::flags::PacketFlags {
-                header_type: rns_wire::flags::HeaderType::Header1,
-                context_flag: false,
-                transport_type: rns_wire::flags::TransportType::Broadcast,
-                destination_type: rns_wire::flags::DestinationType::Single,
-                packet_type: rns_wire::flags::PacketType::Data,
-            };
-            let header = rns_wire::header::PacketHeader {
-                flags,
-                hops: 0,
-                transport_id: None,
-                destination_hash: dest_hash,
-                context: rns_wire::context::PacketContext::None,
-            };
-            let mut raw = header.pack();
-            raw.extend_from_slice(&payload);
-
-            // Escalate oversize packets to link delivery.
-            if raw.len() > rns_wire::constants::MTU {
-                tracing::info!(
+            let Some(runtime) = self.runtime.as_ref() else {
+                tracing::error!(
                     dest = %dest_hex,
-                    packet_len = raw.len(),
-                    "packet exceeds MTU; routing to link delivery"
+                    "Reticulum runtime unavailable for opportunistic delivery"
                 );
-                let attempts = mark_delivery_attempt(&mut message);
-                if attempts >= MAX_DELIVERY_ATTEMPTS {
-                    tracing::warn!(
-                        dest = %dest_hex,
-                        attempts,
-                        max_attempts = MAX_DELIVERY_ATTEMPTS,
-                        "oversized direct delivery attempt budget reached; deferring terminal failure"
-                    );
-                    self.router.send(message);
-                    continue;
-                }
-                let hops = route_hops_for(&self.route_hops, dest_hash);
-                self.ensure_link_delivery();
-                if let Some(ref mut ld) = self.link_delivery
-                    && let Err(err) = ld.start_delivery(message, dest_hash, hops)
-                {
-                    let reason = err.error.to_string();
-                    tracing::warn!(
-                        error = %reason,
-                        dest = %dest_hex,
-                        "failed to start oversized direct link delivery"
-                    );
-                    requeue_after_path_request(
-                        &mut self.router,
-                        &self.transport_tx,
-                        *err.message,
-                        dest_hash,
-                        &reason,
-                        false,
-                    );
-                }
+                self.router.send(message);
                 continue;
-            }
-
-            match self.transport_tx.try_send(TransportMessage::Outbound(
-                rns_transport::messages::OutboundRequest {
-                    raw: Bytes::from(raw.clone()),
-                    destination_hash: dest_hash,
-                },
-            )) {
-                Ok(()) => {
+            };
+            match rns_runtime::application::try_send_pre_encrypted_packet(
+                runtime, dest_hash, &payload,
+            ) {
+                Ok(submission) => {
                     if let Some(hash) = msg_hash {
-                        let (full, trunc) = rns_wire::hash::packet_hash_pair(
-                            &raw,
-                            rns_wire::flags::HeaderType::Header1,
-                        );
                         let _ = self
                             .transport_tx
                             .try_send(TransportMessage::RegisterReceipt {
-                                truncated_hash: trunc,
-                                full_hash: full,
+                                truncated_hash: submission.truncated_hash,
+                                full_hash: submission.packet_hash,
                                 msg_id: hex::encode(hash),
                                 timeout: Some(Duration::from_secs(15)),
                             });
                         tracing::info!(hash = %hex::encode(hash), "message sent");
                     }
                 }
-                Err(e) => {
-                    tracing::error!(dest = %dest_hex, error = %e, "failed to send; message dropped");
+                Err(rns_runtime::application::ApplicationError::MtuExceeded { size, .. }) => {
+                    tracing::info!(
+                        dest = %dest_hex,
+                        packet_len = size,
+                        "packet exceeds MTU; routing to link delivery"
+                    );
+                    let attempts = mark_delivery_attempt(&mut message);
+                    if attempts >= MAX_DELIVERY_ATTEMPTS {
+                        tracing::warn!(
+                            dest = %dest_hex,
+                            attempts,
+                            max_attempts = MAX_DELIVERY_ATTEMPTS,
+                            "oversized direct delivery attempt budget reached; deferring terminal failure"
+                        );
+                        self.router.send(message);
+                        continue;
+                    }
+                    let hops = route_hops_for(&self.route_hops, dest_hash);
+                    self.ensure_link_delivery();
+                    if let Some(ref mut ld) = self.link_delivery
+                        && let Err(err) = ld.start_delivery(message, dest_hash, hops)
+                    {
+                        let reason = err.error.to_string();
+                        tracing::warn!(
+                            error = %reason,
+                            dest = %dest_hex,
+                            "failed to start oversized direct link delivery"
+                        );
+                        requeue_after_path_request(
+                            &mut self.router,
+                            &self.transport_tx,
+                            *err.message,
+                            dest_hash,
+                            &reason,
+                            false,
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(
+                        dest = %dest_hex,
+                        error = %error,
+                        "failed to send; message dropped"
+                    );
                 }
             }
         }

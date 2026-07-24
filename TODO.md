@@ -26,6 +26,8 @@
   `LinkSessionHandle` с identification до отправки и закрытием после proof.
 - [x] Отключить legacy Link/Resource fallback для production-сборок:
   Direct и propagation требуют настроенный `ReticulumHandle`.
+- [x] Перевести рабочий opportunistic delivery path `lxmd` с ручной сборки
+  DATA-пакета на `try_send_pre_encrypted_packet` rsReticulum.
 - [x] Проверить полный workspace rsLXMF после рефакторинга: проходят core,
   tools, examples, CLI и doc tests.
 
@@ -38,8 +40,6 @@
     обработку proofs на публичные API rsReticulum.
 - [ ] Сохранить поддержку входящих backchannel-ссылок через `LinkManager`,
   убрав из rsLXMF ручную обработку Resource advertisement, parts, HMU и proofs.
-- [ ] Перевести opportunistic delivery с ручной сборки Reticulum DATA-пакета на
-  application-level API rsReticulum.
 - [ ] Удалить оставшиеся неиспользуемые структуры и зависимости низкого уровня
   (`rns-link`, Resource transfer primitives и ручные wire headers), если после
   миграции они больше не нужны rsLXMF.
