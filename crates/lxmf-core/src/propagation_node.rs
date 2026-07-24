@@ -15,6 +15,8 @@ use crate::propagation::{PropagationEntry, PropagationStore, hex_encode};
 use crate::sync::{OfferResponse, SyncGet, SyncOffer, SyncSession};
 use crate::types::PropagationTransientId;
 
+const SYNC_SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 #[derive(Debug, Clone)]
 pub struct PropagationNodeConfig {
     pub max_storage: usize,
@@ -463,9 +465,17 @@ impl PropagationNode {
     /// messages instead of wedging at the ingest reject), and clean up
     /// orphaned files.
     pub fn tick(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(0.0);
         let before = self.store.len();
         self.store.cull_expired(self.config.max_message_age);
         self.store.cull_by_weight(self.config.max_storage);
+        self.last_offer_times
+            .retain(|_, last_offer| now <= *last_offer + PN_STAMP_THROTTLE as f64);
+        self.sync_sessions
+            .retain(|_, session| !session.idle_for(SYNC_SESSION_IDLE_TIMEOUT));
         let after = self.store.len();
 
         if before > after
@@ -1369,6 +1379,41 @@ mod tests {
 
         node.tick();
         assert_eq!(node.message_count(), 0);
+    }
+
+    #[test]
+    fn test_tick_culls_expired_offer_throttles() {
+        let mut node = PropagationNode::new(PropagationNodeConfig::default(), [0xAA; 16]);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        node.last_offer_times
+            .insert([0x01; 16], now - PN_STAMP_THROTTLE as f64 - 1.0);
+        node.last_offer_times.insert([0x02; 16], now);
+
+        node.tick();
+
+        assert!(!node.last_offer_times.contains_key(&[0x01; 16]));
+        assert!(node.last_offer_times.contains_key(&[0x02; 16]));
+    }
+
+    #[test]
+    fn test_tick_culls_idle_sync_sessions() {
+        let mut node = PropagationNode::new(PropagationNodeConfig::default(), [0xAA; 16]);
+        let stale_peer = [0x01; 16];
+        let active_peer = [0x02; 16];
+        node.start_session(stale_peer).set_last_activity(
+            std::time::Instant::now()
+                - SYNC_SESSION_IDLE_TIMEOUT
+                - std::time::Duration::from_secs(1),
+        );
+        node.start_session(active_peer);
+
+        node.tick();
+
+        assert!(node.get_session(&stale_peer).is_none());
+        assert!(node.get_session(&active_peer).is_some());
     }
 
     /// After a message is culled (expired), the same message resurfacing

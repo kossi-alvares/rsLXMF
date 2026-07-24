@@ -15,6 +15,7 @@
 
 use rns_protocol::channel_message::{ChannelMessageError, MessageBase};
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
 
 use crate::constants::PeerError;
 use crate::propagation::PropagationStore;
@@ -195,6 +196,7 @@ pub struct SyncSession {
     pub offered_ids: Vec<PropagationTransientId>,
     pub wanted_ids: Vec<PropagationTransientId>,
     pub transferred: usize,
+    last_activity: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,7 +217,21 @@ impl SyncSession {
             offered_ids: Vec::new(),
             wanted_ids: Vec::new(),
             transferred: 0,
+            last_activity: Instant::now(),
         }
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+
+    pub(crate) fn idle_for(&self, max_idle: Duration) -> bool {
+        self.last_activity.elapsed() > max_idle
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_activity(&mut self, last_activity: Instant) {
+        self.last_activity = last_activity;
     }
 
     pub fn prepare_offer(
@@ -225,6 +241,7 @@ impl SyncSession {
     ) -> SyncOffer {
         self.offered_ids = our_ids.clone();
         self.state = SyncState::OfferSent;
+        self.touch();
         SyncOffer {
             peering_key,
             transient_ids: our_ids.into_iter().map(|id| id.to_vec()).collect(),
@@ -249,6 +266,7 @@ impl SyncSession {
             .collect();
 
         self.state = SyncState::Receiving;
+        self.touch();
         SyncGet { wanted_ids: wanted }
     }
 
@@ -267,18 +285,22 @@ impl SyncSession {
             })
             .collect();
         self.state = SyncState::Sending;
+        self.touch();
     }
 
     pub fn mark_complete(&mut self) {
         self.state = SyncState::Complete;
+        self.touch();
     }
 
     pub fn mark_failed(&mut self) {
         self.state = SyncState::Failed;
+        self.touch();
     }
 
     pub fn record_transfer(&mut self) {
         self.transferred += 1;
+        self.touch();
     }
 
     pub fn is_finished(&self) -> bool {
