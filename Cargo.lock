@@ -656,6 +656,7 @@ dependencies = [
  "rns-identity",
  "rns-link",
  "rns-protocol",
+ "rns-runtime",
  "rns-transport",
  "rns-wire",
  "serde",

@@ -13,6 +13,7 @@ rns-identity = { workspace = true }
 rns-link = { workspace = true }
 rns-protocol = { workspace = true }
 rns-transport = { workspace = true }
+rns-runtime = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 bytes = { workspace = true }

@@ -483,6 +483,7 @@ struct LxmdRunner {
     propagation_sync: Option<lxmf_core::propagation_sync::PropagationSyncTask>,
     propagation_client: Option<lxmf_core::propagation_client::PropagationClient>,
     propagation_node: Option<Arc<Mutex<PropagationNode>>>,
+    runtime: Option<rns_runtime::reticulum::ReticulumHandle>,
     transport_tx: mpsc::Sender<TransportMessage>,
     /// Plaintext application data decoded by the LinkManager.
     link_packet_rx: mpsc::Receiver<(Vec<u8>, [u8; 16])>,
@@ -512,6 +513,7 @@ impl LxmdRunner {
         config: DaemonConfig,
         config_dir: &Path,
         transport_tx: mpsc::Sender<TransportMessage>,
+        runtime: Option<rns_runtime::reticulum::ReticulumHandle>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let paths = LxmdPaths::new(config_dir);
         std::fs::create_dir_all(&paths.config_dir)?;
@@ -933,6 +935,7 @@ impl LxmdRunner {
             propagation_sync: None,
             propagation_client: None,
             propagation_node: None,
+            runtime,
             transport_tx: transport_tx.clone(),
             link_packet_rx,
             resource_rx,
@@ -971,6 +974,9 @@ impl LxmdRunner {
                 Some(runner.identity.get_public_key()),
                 runner.identity.get_signing_key(),
             );
+            if let Some(runtime) = runner.runtime.clone() {
+                client.set_runtime(runtime);
+            }
             if let Some(ref node_hex) = runner.config.outbound_propagation_node {
                 match hex::decode(node_hex) {
                     Ok(bytes) if bytes.len() == 16 => {
@@ -1523,9 +1529,16 @@ impl LxmdRunner {
                 && client.state == lxmf_core::propagation_client::PropagationClientState::Idle
             {
                 if propagation_node_ready {
-                    client.start_download();
-                    self.last_propagation_check = now;
-                    tracing::debug!("auto-triggered propagation download");
+                    let node = self
+                        .router
+                        .outbound_propagation_node
+                        .expect("checked propagation node");
+                    if let Some(public_key) = self.known_identities.get(&hex::encode(node)).copied()
+                        && client.start_download_with_public_key(public_key)
+                    {
+                        self.last_propagation_check = now;
+                        tracing::debug!("auto-triggered propagation download");
+                    }
                 } else if let Some(node) = self.router.outbound_propagation_node
                     && queue_unknown_propagation_node_path_request(
                         &self.transport_tx,
@@ -2835,7 +2848,12 @@ pub(crate) async fn main() {
         }
     }
 
-    let mut runner = match LxmdRunner::new(daemon_config.clone(), &config_dir, transport_tx) {
+    let mut runner = match LxmdRunner::new(
+        daemon_config.clone(),
+        &config_dir,
+        transport_tx,
+        Some(rns_handle.clone()),
+    ) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Failed to initialize LXMF daemon: {e}");
@@ -3437,7 +3455,7 @@ mod tests {
             stamp_cost: Some(8),
             ..Default::default()
         };
-        let mut runner = LxmdRunner::new(config, &temp, tx).expect("runner");
+        let mut runner = LxmdRunner::new(config, &temp, tx, None).expect("runner");
 
         let dest = [0xAB; 16];
         assert_ne!(dest, runner.lxmf_dest_hash);
