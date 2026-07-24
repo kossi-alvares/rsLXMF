@@ -63,9 +63,11 @@
 
 ## Следующие шаги
 
-- [ ] Удалить оставшиеся неиспользуемые структуры и зависимости низкого уровня
+- [x] Удалить оставшиеся неиспользуемые структуры и зависимости низкого уровня
   (`rns-link`, Resource transfer primitives и ручные wire headers), если после
-  миграции они больше не нужны rsLXMF.
+  миграции они больше не нужны rsLXMF. Неиспользуемый `ResourceResult` удалён;
+  `rns-wire` и `rns-protocol` сохранены для используемых packet parsing и LXMF
+  sync message types.
 - [ ] Добавить интеграционные сетевые тесты для:
   - [x] direct delivery короткого сообщения между двумя `LinkManager`;
   - [x] direct delivery через Resource между двумя `LinkManager`;

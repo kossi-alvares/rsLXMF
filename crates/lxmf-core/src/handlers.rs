@@ -325,15 +325,6 @@ pub fn pn_name_from_app_data(data: &[u8]) -> Option<String> {
     String::from_utf8(name_bytes.clone()).ok()
 }
 
-/// Outcome of a resource transfer, matching Python `resource_concluded` /
-/// `propagation_resource_concluded` callbacks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResourceResult {
-    Complete,
-    Rejected,
-    Failed,
-}
-
 /// Propagation-node control endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlEndpoint {
@@ -923,12 +914,6 @@ mod tests {
         let packed = get_propagation_node_app_data(&data);
         let parsed = parse_pn_announce_data(&packed).unwrap();
         assert!(parsed.metadata.is_empty());
-    }
-
-    #[test]
-    fn test_resource_result() {
-        assert_ne!(ResourceResult::Complete, ResourceResult::Rejected);
-        assert_ne!(ResourceResult::Complete, ResourceResult::Failed);
     }
 
     #[test]
