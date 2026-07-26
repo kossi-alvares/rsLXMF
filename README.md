@@ -23,6 +23,11 @@ rsLXMF is a Rust implementation of LXMF, the Reticulum messaging layer. This is 
 Commands are intentionally namespaced for Rust with the Rust-specific `lxmd-rs` command, so rsLXMF can live beside other
 LXMF daemons on `PATH` without worry.
 
+The adjacent `rsNomadNet` web client uses `lxmf-core` directly for persistent
+text conversations. Its live compatibility coverage exercises opportunistic
+single-packet delivery, proof-backed Direct/Resource delivery, propagation
+deposit and retrieval, restart recovery, retries, and inbound deduplication.
+
 ## Contents
 
 - [Build It](#build-it)
@@ -31,6 +36,7 @@ LXMF daemons on `PATH` without worry.
 - [Configuration](#configuration)
 - [Delivery Model](#delivery-model)
 - [Feature Status](#feature-status)
+- [Related projects](#related-projects)
 - [Compatibility Notes](#compatibility-notes)
 - [Contributing](#contributing)
 - [License](#license)
@@ -329,6 +335,14 @@ application envelopes.
 | Stamps and tickets | Soft/hard stamp validation, HKDF-expanded workblocks, cached destination stamp costs, propagation tickets, and restart-safe ticket persistence. |
 | Control | `--status`, `--peers`, `--sync`, and `--break` over the propagation-control link. |
 | Access lists | `ignored` and `allowed` hash-list files in the LXMF config directory. |
+
+## Related projects
+
+- `rsReticulum` provides the transport runtime used by the library and daemon.
+- `rsNomadNet` embeds the library for a NomadNet-compatible Web UI.
+- `lxmd-rs` remains the standalone daemon and propagation-node implementation;
+  rsNomadNet can discover and use compatible propagation nodes without running
+  its own node.
 
 ## Compatibility Notes
 
