@@ -74,6 +74,10 @@ impl DeliveryIdentity {
         self.display_name.as_deref()
     }
 
+    pub fn set_display_name(&mut self, display_name: Option<String>) {
+        self.display_name = display_name;
+    }
+
     pub fn stamp_cost(&self) -> Option<u8> {
         self.stamp_cost
     }
@@ -131,6 +135,10 @@ mod tests {
             DeliveryIdentity::new(Identity::new(), Some("Example".into()), Some(8)).unwrap();
         let (name, cost) = parse_announce_app_data(&local.announce_app_data()).unwrap();
         assert_eq!(name.as_deref(), Some("Example"));
+        assert_eq!(cost, Some(8));
+        local.set_display_name(Some("Renamed".into()));
+        let (name, cost) = parse_announce_app_data(&local.announce_app_data()).unwrap();
+        assert_eq!(name.as_deref(), Some("Renamed"));
         assert_eq!(cost, Some(8));
         assert!(!local.announce_packet(1_700_000_000.0).unwrap().is_empty());
 
