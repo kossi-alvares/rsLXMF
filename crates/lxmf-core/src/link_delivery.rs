@@ -743,12 +743,26 @@ impl LinkDeliveryManager {
         ) {
             let establishment_timeout_secs = ESTABLISHMENT_TIMEOUT_PER_HOP * (hops.max(1) as f64);
             let timeout = Duration::from_secs_f64(establishment_timeout_secs + KEEPALIVE_DEFAULT);
+            // `next_hop_mtu: None` -- not a placeholder, the only value this
+            // call site can supply. rns-runtime's own MTU-discovery lookup
+            // (`LinkSession::next_hop_interface_mtu`) is async and
+            // `pub(crate)`-scoped to that crate; `prepare_with_public_key` is
+            // deliberately synchronous ("without performing any transport
+            // I/O") specifically so `prepared.id()` below is available before
+            // any `.await`, which `self.pending`'s bookkeeping depends on.
+            // Adding the lookup here would mean awaiting before `link_id`
+            // exists. `None` reproduces the pre-MTU-discovery signalled MTU
+            // (`rns_wire::constants::MTU`, 500 bytes) exactly -- correctness
+            // is unaffected, this only forgoes the larger-segment throughput
+            // optimization that `LinkSession::establish_with_public_key`/
+            // `open_with_public_key` callers get automatically.
             let prepared = LinkSession::prepare_with_public_key(
                 runtime,
                 identity.clone(),
                 dest_hash,
                 *public_key,
                 hops,
+                None,
             );
             let link_id = prepared.id();
             let handle = prepared.spawn(Duration::from_secs_f64(establishment_timeout_secs));
@@ -997,12 +1011,26 @@ impl LinkDeliveryManager {
         {
             let establishment_timeout_secs = ESTABLISHMENT_TIMEOUT_PER_HOP * (hops.max(1) as f64);
             let timeout = Duration::from_secs_f64(establishment_timeout_secs + KEEPALIVE_DEFAULT);
+            // `next_hop_mtu: None` -- not a placeholder, the only value this
+            // call site can supply. rns-runtime's own MTU-discovery lookup
+            // (`LinkSession::next_hop_interface_mtu`) is async and
+            // `pub(crate)`-scoped to that crate; `prepare_with_public_key` is
+            // deliberately synchronous ("without performing any transport
+            // I/O") specifically so `prepared.id()` below is available before
+            // any `.await`, which `self.pending`'s bookkeeping depends on.
+            // Adding the lookup here would mean awaiting before `link_id`
+            // exists. `None` reproduces the pre-MTU-discovery signalled MTU
+            // (`rns_wire::constants::MTU`, 500 bytes) exactly -- correctness
+            // is unaffected, this only forgoes the larger-segment throughput
+            // optimization that `LinkSession::establish_with_public_key`/
+            // `open_with_public_key` callers get automatically.
             let prepared = LinkSession::prepare_with_public_key(
                 runtime,
                 identity.clone(),
                 dest_hash,
                 *public_key,
                 hops,
+                None,
             );
             let link_id = prepared.id();
             let handle = prepared.spawn(Duration::from_secs_f64(establishment_timeout_secs));

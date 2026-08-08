@@ -1143,6 +1143,7 @@ dependencies = [
 name = "rns-protocol"
 version = "1.0.1"
 dependencies = [
+ "bytes",
  "bzip2",
  "hex",
  "rmp-serde",

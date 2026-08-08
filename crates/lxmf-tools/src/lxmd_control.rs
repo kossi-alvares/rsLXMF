@@ -73,7 +73,7 @@ pub async fn resolve_remote_identity_hash(
         .send(TransportMessage::RegisterAnnounceHandler {
             aspect_filter: Some(PROPAGATION_APP_NAME.to_string()),
             receive_path_responses: true,
-            callback_tx: ann_tx,
+            callback_tx: ann_tx.clone(),
         })
         .await
         .map_err(|_| LinkClientError::TransportUnavailable)?;
@@ -85,7 +85,7 @@ pub async fn resolve_remote_identity_hash(
         .await;
     if send_result.is_err() {
         let _ = transport_tx.try_send(TransportMessage::DeregisterAnnounceHandler {
-            aspect_filter: Some(PROPAGATION_APP_NAME.to_string()),
+            callback_tx: ann_tx,
         });
         return Err(LinkClientError::TransportUnavailable);
     }
@@ -107,8 +107,10 @@ pub async fn resolve_remote_identity_hash(
             Err(_) => Err(LinkClientError::Timeout("remote identity resolution")),
         };
 
+    // Scoped to this call's own channel: deregistering by aspect would
+    // unsubscribe every other concurrent watcher of the propagation aspect.
     let _ = transport_tx.try_send(TransportMessage::DeregisterAnnounceHandler {
-        aspect_filter: Some(PROPAGATION_APP_NAME.to_string()),
+        callback_tx: ann_tx,
     });
 
     result
